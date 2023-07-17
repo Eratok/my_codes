@@ -1,0 +1,13 @@
+select t3.account_name, t1.org_name, t1.org_id, t1.group_name, t1.group_id
+from
+(SELECT distinct sample_date, org_name, org_id, group_name, group_id
+FROM awsdatacatalog.product_analytics.ms_vector_brainstorm_final
+where vector_usage > 0
+and org_id is not null) as t1
+left join (select distinct org_sfdc_account_id, org_name, org_id.oid AS org_id_string 
+from awsdatacatalog.remodel_cloud.dw__cloud_backend__cloud_orgs_full_history where processed_date = date_add('day',-2,current_date)) as t2 
+on t1.org_id = t2.org_id_string
+left join (select distinct account_id, account_name from awsdatacatalog.xform_sales.sfdc_account_v) as t3
+on t2.org_sfdc_account_id=t3.account_id
+order by 1,2,3,4,5
+;
