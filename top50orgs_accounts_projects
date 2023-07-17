@@ -1,0 +1,60 @@
+select distinct a1.account_name, a3.org_name, a3.org_id, a3.group_name, a3.group_id
+from
+(select distinct account_id, account_name
+from awsdatacatalog.xform_sales.sfdc_account_v
+where account_name  in ('Delivery Hero SE',
+'OrbWeaver',
+'Adeo Services',
+'Courier Plus Inc.',
+'Anywhere Real Estate Services Group LLC',
+'Albertsons Companies, Inc.',
+'MuneebParwazMP',
+'NTT West-Kansai Corporation',
+'Xactware Solutions, Inc.',
+'Dr. Ing. h.c. F. Porsche AG',
+'Gigg, Inc.',
+'AT&T Inc.',
+'Raptor Services A/S',
+'Carrefour Middle East-MAF RETAIL',
+'APONTADOR BUSCA LOCAL LTDA.',
+'Hub Group, Inc.',
+'Cademy',
+'Disney Worldwide Services, Inc',
+'Hippo Innovations Private Limited',
+'Axabee',
+'Moveecar',
+'Liberty Mutual Insurance Company',
+'Finanzchef24 GmbH',
+'Booke.ai',
+'Department for Work and Pensions',
+'Yousician Oy',
+'Physna',
+'Sonicjobs',
+'Typeb',
+'Zluri Inc.',
+'iFinGate Limited',
+'WEBMANIABR - SERVICOS EMPRESARIAIS LTDA',
+'Cognism Limited',
+'HUD Studio Limited',
+'Teeshirt Palace',
+'Keller Williams Realty, Inc.',
+'Progressive Casualty Insurance Company',
+'GOSPRINT LOGISTICS PVT LTD',
+'Orderhive Inc.',
+'Lithia Motors, Inc.',
+'Scout24 AG',
+'Furlenco',
+'Swiss Re AG',
+'Stradext Defi Solutions S.L.',
+'MTB Database',
+'Jobgether SRL',
+'Wizz',
+'finary',
+'Infinitas Technology BV',
+'Utopia Music AG')) as a1
+join (select distinct org_sfdc_account_id, org_name, org_id.oid AS org_id_string from awsdatacatalog.remodel_cloud.dw__cloud_backend__cloud_orgs_full_history where processed_date = date_add('day',-2,current_date)) as a2
+on a1.account_id = a2.org_sfdc_account_id
+join (select distinct org_name, org_id, group_id, group_name from awsdatacatalog.xform_cloud.cloud_cluster_org_dateversioned_v where partition_date = date_add('day',-2,current_date)) as a3
+on a2.org_id_string = a3.org_id
+order by 1,2,3,4,5
+;
