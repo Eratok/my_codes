@@ -1,0 +1,59 @@
+select distinct fnt.org_name,
+fnt.org_id,
+fnt.group_id,
+fnt.group_name,
+fnt.regression_project_ind,
+fnt.latest_deployment_ds,
+case when fnt.latest_deployment_ds is not null then 1 else 0 end as search_deployed
+from
+(select distinct t1.org_name,
+t1.org_id,
+t1.group_id,
+t1.group_name,
+t1.regression_project_ind,
+max(t2.latest_deployment_ds) as latest_deployment_ds
+from
+(select distinct org_name,
+org_id,
+cluster_id,
+group_id,
+group_name,
+case when group_id in ('60635e5d2fd5473896da60fe',
+'5cb887bdd5ec138beba98d61',
+'5e45ed43cf09a23781d29b8',
+'5b54f92596e821402db3e593',
+'5f6e0dc097891a1d4aa0c7e7',
+'5f6de46bf1723c0415ba027c',
+'5c13689ff2a30ba42d8e178e',
+'5b54f92596e821402db3e593',
+'6099050e9fb6577418d0211a',
+'596df9b896e8214b2e64148b',
+'5ed682d6c159cb0eac7710a2',
+'5cc887dbf2a30b3c755ac0f0',
+'6095fa14e623e52180f26b23') then 1 else 0 end as regression_project_ind
+from awsdatacatalog.xform_cloud.cloud_cluster_org_dateversioned_v
+where org_id in (select distinct org_id
+from awsdatacatalog.xform_cloud.cloud_cluster_org_dateversioned_v
+where group_id in ('60635e5d2fd5473896da60fe',
+'5cb887bdd5ec138beba98d61',
+'5e45ed43cf09a23781d29b8',
+'5b54f92596e821402db3e593',
+'5f6e0dc097891a1d4aa0c7e7',
+'5f6de46bf1723c0415ba027c',
+'5c13689ff2a30ba42d8e178e',
+'5b54f92596e821402db3e593',
+'6099050e9fb6577418d0211a',
+'596df9b896e8214b2e64148b',
+'5ed682d6c159cb0eac7710a2',
+'5cc887dbf2a30b3c755ac0f0',
+'6095fa14e623e52180f26b23')
+or org_name in ('Cisco','Humanitix','Glassdoor','Viso'))
+and partition_date = date_add('day',-2,current_date)) as t1
+left join (select cluster_id, max(deployment_ds) as latest_deployment_ds
+from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2
+where ds = date_add('day',-2,current_date)
+group by 1) as t2
+on t1.cluster_id = t2.cluster_id
+group by 1,2,3,4,5) as fnt
+order by 1,2,3,4
+;
