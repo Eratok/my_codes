@@ -1,4 +1,20 @@
-select distinct a1.account_name, a3.org_name, a3.org_id, a3.group_name, a3.group_id
+select distinct 
+fnt.account_name,
+fnt.org_name,
+fnt.org_id,
+fnt.group_id,
+fnt.group_name,
+fnt.latest_deployment_ds,
+case when fnt.latest_deployment_ds is not null then 1 else 0 end as search_deployed
+from
+(select distinct t1.account_name,
+t1.org_name,
+t1.org_id,
+t1.group_id,
+t1.group_name,
+max(t2.latest_deployment_ds) as latest_deployment_ds
+from
+(select distinct a1.account_name, a3.org_name, a3.org_id, a3.group_name, a3.group_id, a3.cluster_id
 from
 (select distinct account_id, account_name
 from awsdatacatalog.xform_sales.sfdc_account_v
@@ -54,7 +70,13 @@ where account_name  in ('Delivery Hero SE',
 'Utopia Music AG')) as a1
 join (select distinct org_sfdc_account_id, org_name, org_id.oid AS org_id_string from awsdatacatalog.remodel_cloud.dw__cloud_backend__cloud_orgs_full_history where processed_date = date_add('day',-2,current_date)) as a2
 on a1.account_id = a2.org_sfdc_account_id
-join (select distinct org_name, org_id, group_id, group_name from awsdatacatalog.xform_cloud.cloud_cluster_org_dateversioned_v where partition_date = date_add('day',-2,current_date)) as a3
-on a2.org_id_string = a3.org_id
+join (select distinct org_name, org_id, cluster_id, group_id, group_name from awsdatacatalog.xform_cloud.cloud_cluster_org_dateversioned_v where partition_date = date_add('day',-2,current_date)) as a3
+on a2.org_id_string = a3.org_id) as t1
+left join (select cluster_id, max(deployment_ds) as latest_deployment_ds
+from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2
+where ds = date_add('day',-2,current_date)
+group by 1) as t2
+on t1.cluster_id = t2.cluster_id
+group by 1,2,3,4,5) as fnt
 order by 1,2,3,4,5
 ;
