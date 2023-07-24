@@ -1,19 +1,6 @@
-select distinct fnt.org_name,
-fnt.org_id,
-fnt.group_id,
-fnt.group_name,
-fnt.regression_project_ind,
-fnt.latest_deployment_ds,
-case when fnt.latest_deployment_ds is not null then 1 else 0 end as search_deployed
-from
-(select distinct t1.org_name,
-t1.org_id,
-t1.group_id,
-t1.group_name,
-t1.regression_project_ind,
-max(t2.latest_deployment_ds) as latest_deployment_ds
-from
-(select distinct org_name,
+with regress_orgs as (
+
+select distinct org_name,
 org_id,
 cluster_id,
 group_id,
@@ -48,12 +35,64 @@ where group_id in ('60635e5d2fd5473896da60fe',
 '5cc887dbf2a30b3c755ac0f0',
 '6095fa14e623e52180f26b23')
 or org_name in ('Cisco','Humanitix','Glassdoor','Viso'))
-and partition_date = date_add('day',-2,current_date)) as t1
-left join (select cluster_id, max(deployment_ds) as latest_deployment_ds
+and partition_date = date_add('day',-2,current_date)
+)
+
+,get_deployment_ds as (
+
+select cluster_id, max(deployment_ds) as latest_deployment_ds
 from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2
 where ds = date_add('day',-2,current_date)
-group by 1) as t2
-on t1.cluster_id = t2.cluster_id
-group by 1,2,3,4,5) as fnt
-order by 1,2,3,4
-;
+group by 1
+)
+
+,mrr AS (
+
+select
+m.org_id
+,v.org_name
+,m.cluster_id
+,case when v.instance_size not in ('SERVERLESS_V2','M0','M2','M5') and s.lness_30d >= 21 and s.active_7d_usage >= 300 then 1 else 0 end AS qualified_flag
+,s.active_7d_usage
+,date(m.usage_date) as usage_date
+,m.mrr__total AS mrr_total
+from awsdatacatalog.ns__analytics_postprocessing.analytics__atlas__mrr_daily m
+left join awsdatacatalog.ns__analytics_postprocessing.analytics__atlas_search_usage_dim s on s.ds = m.usage_date and s.granularity_id = m.cluster_id
+left join awsdatacatalog.xform_cloud.cloud_cluster_org_dateversioned_v v on v.cluster_id = m.cluster_id and date(v.partition_date) = date(m.usage_date)
+where date(m.usage_date) = date_add('day',-2,current_date)
+)
+
+,final_table as (
+
+select distinct
+o.org_name
+,o.org_id
+,o.group_name
+,o.group_id
+,o.regression_project_ind
+,max(case when d.latest_deployment_ds is not null then 1 else 0 end) as search_deployed
+,sum(m.active_7d_usage) as active_7d_usage
+,sum(case when m.qualified_flag>0 then 1 else 0 end) as qualified_flag
+,sum(CASE WHEN qualified_flag = 1 then mrr_total ELSE 0 END) * 12 as total_qualified_arr
+,sum(mrr_total) * 12 as total_arr
+from regress_orgs o
+left join mrr m
+on o.cluster_id = m.cluster_id
+left join get_deployment_ds d
+on o.cluster_id = d.cluster_id
+group by 1,2,3,4,5
+order by 1,2,3,4,5
+)
+
+select 
+org_name
+,org_id
+,group_name
+,group_id
+,regression_project_ind
+,coalesce(search_deployed,0) as search_deployed
+,coalesce(active_7d_usage,0) as active_7d_usage
+,coalesce(qualified_flag,0) as qualified_flag
+,coalesce(total_qualified_arr,0) as total_qualified_arr
+,coalesce(total_arr,0) as total_arr
+from final_table
