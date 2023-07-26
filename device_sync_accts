@@ -1,0 +1,33 @@
+with base as (
+
+select distinct atlas_org_name,
+granularity_id as org_id,
+active_7d_usage,
+ds
+from awsdatacatalog.ns__analytics_postprocessing.analytics__atlas_realm_feature_usage_dim
+where ds = date_add('day',-2,current_date)
+and granularity ='organization'
+and product='Sync'
+and active_7d_flg=1
+order by active_7d_usage desc)
+
+,account_names as (
+
+select distinct a1.account_name, a1.account_id, a2.org_name, a2.org_id_string
+from awsdatacatalog.xform_sales.sfdc_account_v a1
+join (select distinct org_sfdc_account_id, org_name, org_id.oid AS org_id_string
+from awsdatacatalog.remodel_cloud.dw__cloud_backend__cloud_orgs_full_history
+where processed_date = date_add('day',-2,current_date)) as a2
+on a1.account_id = a2.org_sfdc_account_id
+)
+
+select distinct 
+ds
+,a.account_name
+,a.account_id
+,sum(b.active_7d_usage) as active_7d_usage
+from base b
+join account_names a
+on b.org_id = a.org_id_string
+group by 1,2,3
+order by 4 desc
