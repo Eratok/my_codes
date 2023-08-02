@@ -1,0 +1,217 @@
+with base as(
+
+select *
+from
+(select distinct t1.extracted_at
+,t1.account_name
+,t1.acctid
+,t1.opp_id
+,t1.workload_id 
+,t1.wl_create_date
+,t1.opp_close_date
+,t1.csm_approve_date
+,t1.stage
+,t1.onboarding_status__c 
+,t1.searchimportance
+,t1.wl_type
+,t1.est_12m_arr
+,t1.search_query_volume_rolling_7_day__c
+,t1.weeks_above_300_search_queries__c
+,t1.weeks_above_10_000_search_queries__c
+,t1.weeks_above_100_000_search_queries__c
+,t2.cluster_id
+,row_number() over(partition by t2.cluster_id order by wl_create_date) as row_workload
+from awsdatacatalog.ns__analytics_postprocessing.v_tableau_atlas_search_workloads t1
+left join (select distinct granularity_id as workload_id, cluster_id, cluster_deployment_date 
+from awsdatacatalog.product_analytics.ms_search_workloads_base
+where granularity ='workload') t2
+on t1.workload_id=t2.workload_id
+where t1.workload_id is not null) tmp
+where  month(wl_create_date) >= 3 and year(wl_create_date)>=2023 and ((cluster_id is not null and row_workload=1) or cluster_id is null)
+order by acctid, wl_create_date
+)
+
+,search_usage as (
+
+select cluster_id, deployment_ds, deployed_flg, acquisition_ds, activation_ds, qualification_ds, qualification_flg
+,mrr__total ,active_7d_usage ,total_data_indexed 
+from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2
+where ds = date_add('day',-3,current_date)
+)
+
+
+,prod_model as (
+
+select cluster_id, production_flag
+from awsdatacatalog.data_science.prod_production_identification_results
+where measured_at = date_add('day',-3,current_date)
+)
+
+,workload_arr AS (
+
+select w.workload__c as workload_id,
+		sum(mrr_total)*12 as total_arr
+from awsdatacatalog.raw_sfdc.dw__sfdc__workload_cluster__c as w
+left join (select
+			cluster_id
+			,date(usage_date) as usage_date
+			,mrr__total AS mrr_total
+			from awsdatacatalog.ns__analytics_postprocessing.analytics__atlas__mrr_daily
+			where date(usage_date) = date_add('day',-3,current_date)) as m
+on w.cluster_id__c = m.cluster_id
+group by 1
+)
+
+,joined_table as (
+
+select distinct b.extracted_at
+,b.account_name  
+,b.acctid
+,b.opp_id
+,b.workload_id 
+,b.wl_create_date
+,b.opp_close_date
+,b.csm_approve_date
+,b.stage
+,b.onboarding_status__c 
+,b.searchimportance
+,b.wl_type
+,b.est_12m_arr
+,b.search_query_volume_rolling_7_day__c
+,b.weeks_above_300_search_queries__c
+,b.weeks_above_10_000_search_queries__c
+,b.weeks_above_100_000_search_queries__c
+,s.cluster_id
+,s.deployment_ds
+,s.acquisition_ds 
+,s.activation_ds
+,s.qualification_ds
+,(case when s.deployment_ds is not null then 1 else 0 end) as deployed
+,(case when s.acquisition_ds is not null then 1 else 0 end) as acquired
+,(case when s.activation_ds is not null then 1 else 0 end) as activated
+,(case when s.qualification_ds is not null then 1 else 0 end) as qualified
+,coalesce(s.qualification_flg,0) as qualification_flg
+,coalesce(s.mrr__total,0) as  mrr__total
+,coalesce(s.active_7d_usage,0) as active_7d_usage
+,coalesce(s.total_data_indexed,0) as total_data_indexed
+,case when p.production_flag = true then 1 else 0 end production_flag
+from base b
+left join search_usage s
+on b.cluster_id = s.cluster_id
+left join prod_model p
+on s.cluster_id = p.cluster_id
+order by account_name, wl_create_date, deployment_ds
+)
+
+
+,final_table as (
+
+select *, row_number() over(partition by workload_id order by funnel_steps desc) as row_funnel
+from
+(select distinct extracted_at
+,account_name  
+,acctid
+,opp_id
+,workload_id 
+,wl_create_date
+,opp_close_date
+,csm_approve_date
+,stage
+,onboarding_status__c 
+,searchimportance
+,wl_type
+,est_12m_arr
+,search_query_volume_rolling_7_day__c
+,weeks_above_300_search_queries__c
+,weeks_above_10_000_search_queries__c
+,weeks_above_100_000_search_queries__c
+,cluster_id
+,deployment_ds
+,acquisition_ds 
+,activation_ds
+,qualification_ds
+,deployed
+,acquired
+,activated
+,qualified
+,(deployed+acquired+activated+qualified) as funnel_steps
+,qualification_flg
+,mrr__total
+,active_7d_usage
+,total_data_indexed
+,production_flag
+from joined_table) tmp
+order by account_name, wl_create_date, deployment_ds
+)
+
+select tmp.extracted_at
+,tmp.account_name
+,tmp.acctid
+,tmp.opp_id
+,tmp.workload_id 
+,tmp.wl_create_date
+,tmp.opp_close_date
+,tmp.csm_approve_date
+,tmp.stage
+,tmp.onboarding_status__c 
+,tmp.searchimportance
+,tmp.wl_type
+,tmp.est_12m_arr
+,tmp.search_query_volume_rolling_7_day__c
+,tmp.weeks_above_300_search_queries__c
+,tmp.weeks_above_10_000_search_queries__c
+,tmp.weeks_above_100_000_search_queries__c
+,tmp.num_clusters
+,tmp.deployed
+,tmp.acquired
+,tmp.activated
+,tmp.qualified
+,tmp.qualification_flg
+,w.total_arr
+,tmp.deployed_arr
+,tmp.qualified_arr
+,tmp.active_7d_usage
+,tmp.total_data_indexed
+,case when tmp.production_flag>0 then 1 else 0 end as production_flag
+,fnt.cluster_id
+,fnt.deployment_ds
+,fnt.acquisition_ds 
+,fnt.activation_ds
+,fnt.qualification_ds
+from final_table fnt
+join
+(select extracted_at
+,account_name
+,acctid
+,opp_id
+,workload_id 
+,wl_create_date
+,opp_close_date
+,csm_approve_date
+,stage
+,onboarding_status__c 
+,searchimportance
+,wl_type
+,est_12m_arr
+,search_query_volume_rolling_7_day__c
+,weeks_above_300_search_queries__c
+,weeks_above_10_000_search_queries__c
+,weeks_above_100_000_search_queries__c
+,count(distinct cluster_id) as num_clusters
+,sum(deployed) as deployed
+,sum(acquired) as acquired
+,sum(activated) as activated
+,sum(qualified) as qualified
+,sum(qualification_flg) as qualification_flg
+,sum(case when deployed>0 then mrr__total else 0 end)*12 as  deployed_arr
+,sum(case when qualified>0 then mrr__total else 0 end)*12 as  qualified_arr
+,sum(active_7d_usage) as active_7d_usage
+,sum(total_data_indexed) as total_data_indexed
+,sum(production_flag) as production_flag
+from final_table
+group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17) tmp
+on fnt.workload_id = tmp.workload_id
+left join workload_arr w
+on fnt.workload_id = w.workload_id
+where fnt.row_funnel=1
+order by account_name, wl_create_date, deployment_ds
