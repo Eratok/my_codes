@@ -1,4 +1,4 @@
-with base as(
+with base1 as(
 
 select *
 from
@@ -27,8 +27,36 @@ from awsdatacatalog.product_analytics.ms_search_workloads_base
 where granularity ='workload') t2
 on t1.workload_id=t2.workload_id
 where t1.workload_id is not null) tmp
-where  month(wl_create_date) >= 3 and year(wl_create_date)>=2023 and ((cluster_id is not null and row_workload=1) or cluster_id is null)
+where month(wl_create_date) >= 1 and year(wl_create_date)>=2023
 order by acctid, wl_create_date
+)
+
+,base as (
+
+select b.extracted_at
+,b.account_name
+,b.acctid
+,b.opp_id
+,b.workload_id 
+,b.wl_create_date
+,b.opp_close_date
+,b.csm_approve_date
+,b.stage
+,b.onboarding_status__c 
+,b.searchimportance
+,b.wl_type
+,b.est_12m_arr
+,b.search_query_volume_rolling_7_day__c
+,b.weeks_above_300_search_queries__c
+,b.weeks_above_10_000_search_queries__c
+,b.weeks_above_100_000_search_queries__c
+,b.row_workload
+,s.cluster_id
+from base1 b
+left join 
+(select * from base1 where ((cluster_id is not null and row_workload=1) or cluster_id is null)) s
+on b.workload_id = s.workload_id
+order by b.acctid, b.wl_create_date
 )
 
 ,search_usage as (
@@ -106,7 +134,7 @@ order by account_name, wl_create_date, deployment_ds
 
 ,final_table as (
 
-select *, row_number() over(partition by workload_id order by funnel_steps desc) as row_funnel
+select *, row_number() over(partition by workload_id order by funnel_steps desc, deployment_ds) as row_funnel
 from
 (select distinct extracted_at
 ,account_name  
@@ -178,6 +206,8 @@ select tmp.extracted_at
 ,fnt.acquisition_ds 
 ,fnt.activation_ds
 ,fnt.qualification_ds
+,e.activation_or_usage_eligible
+,e.search_type_eligibility
 from final_table fnt
 join
 (select extracted_at
@@ -213,5 +243,13 @@ group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17) tmp
 on fnt.workload_id = tmp.workload_id
 left join workload_arr w
 on fnt.workload_id = w.workload_id
+left join (select distinct workload_id,
+granularity_id as cluster_id,
+activation_or_usage_eligible,
+search_type_eligibility
+from awsdatacatalog.product_analytics.ms_search_comp_cluster_final
+where ds = date'2023-07-31') e 
+on fnt.workload_id = e.workload_id
+and fnt.cluster_id = e.cluster_id
 where fnt.row_funnel=1
 order by account_name, wl_create_date, deployment_ds
