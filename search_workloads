@@ -20,11 +20,22 @@ from
 ,t1.weeks_above_10_000_search_queries__c
 ,t1.weeks_above_100_000_search_queries__c
 ,t2.cluster_id
+,t2.activation_or_usage_eligible
 ,row_number() over(partition by t2.cluster_id order by wl_create_date) as row_workload
 from awsdatacatalog.ns__analytics_postprocessing.v_tableau_atlas_search_workloads t1
-left join (select distinct granularity_id as workload_id, cluster_id, cluster_deployment_date 
+left join (select w.workload_id, w.cluster_id, e.activation_or_usage_eligible
+from
+(select distinct granularity_id as workload_id, cluster_id, cluster_deployment_date 
 from awsdatacatalog.product_analytics.ms_search_workloads_base
-where granularity ='workload') t2
+where granularity ='workload') w
+join (select distinct workload_id,
+granularity_id as cluster_id,
+activation_or_usage_eligible,
+search_type_eligibility
+from awsdatacatalog.product_analytics.ms_search_comp_cluster_final
+where ds = date'2023-07-31') e
+on w.cluster_id = e.cluster_id
+and e.activation_or_usage_eligible = 1) t2
 on t1.workload_id=t2.workload_id
 where t1.workload_id is not null) tmp
 where month(wl_create_date) >= 1 and year(wl_create_date)>=2023
@@ -206,8 +217,6 @@ select tmp.extracted_at
 ,fnt.acquisition_ds 
 ,fnt.activation_ds
 ,fnt.qualification_ds
-,e.activation_or_usage_eligible
-,e.search_type_eligibility
 from final_table fnt
 join
 (select extracted_at
@@ -243,13 +252,5 @@ group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17) tmp
 on fnt.workload_id = tmp.workload_id
 left join workload_arr w
 on fnt.workload_id = w.workload_id
-left join (select distinct workload_id,
-granularity_id as cluster_id,
-activation_or_usage_eligible,
-search_type_eligibility
-from awsdatacatalog.product_analytics.ms_search_comp_cluster_final
-where ds = date'2023-07-31') e 
-on fnt.workload_id = e.workload_id
-and fnt.cluster_id = e.cluster_id
 where fnt.row_funnel=1
 order by account_name, wl_create_date, deployment_ds
