@@ -33,7 +33,7 @@ granularity_id as cluster_id,
 activation_or_usage_eligible,
 search_type_eligibility
 from awsdatacatalog.product_analytics.ms_search_comp_cluster_final
-where ds = date'2023-07-31') e
+where ds = date'2023-08-31') e
 on w.cluster_id = e.cluster_id
 and e.activation_or_usage_eligible = 1) t2
 on t1.workload_id=t2.workload_id
