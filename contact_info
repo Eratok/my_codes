@@ -1,0 +1,59 @@
+with active_users as
+(select distinct org_id,
+org_name,
+account_id,
+account_name,
+org_sales_channel,
+org_region,
+org_account_segment,
+tier,
+usage_date,
+deployed_date,
+acquired_date,
+activated_date,
+qualified_date
+from
+awsdatacatalog.reporting_analytics.search_funnel sf 
+where sf.usage_date = date('2023-09-26')
+and sf.granularity='Org'
+and sf.activated_date is not null
+and sf.lness_30d >= 10)
+
+,contact_info as 
+(select distinct
+user_first_name AS first_name,
+user_last_name as last_name,
+user_country_code,
+user_personal_email AS email,
+org_id.oid AS org_id,
+t.access_type AS role_name
+FROM awsdatacatalog.remodel_cloud.dw__cloud_backend__cloud_users X_USERS
+CROSS JOIN UNNEST (user_roles) AS t(group_id, org_id, access_type)
+WHERE org_id.oid IS NOT NULL
+--AND access_type = 'ORG_OWNER'
+AND user_personal_email IS NOT null
+and not lower(access_type) like '%chart%')
+
+select *
+from
+(select au.account_id,
+		au.account_name,
+		au.org_sales_channel,
+		au.org_region,
+		au.org_account_segment,
+		au.tier,
+		au.usage_date,
+		au.deployed_date,
+		au.acquired_date,
+		au.activated_date,
+		au.qualified_date,
+		ci.first_name,
+		ci.last_name,
+		ci.email,
+		ci.role_name,
+		row_number() over(partition by au.org_id) as num_email
+from active_users au
+left join contact_info ci
+on au.org_id = ci.org_id
+where ci.role_name = 'ORG_OWNER') tmp
+where tmp.num_email = 1
