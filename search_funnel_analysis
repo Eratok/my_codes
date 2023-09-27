@@ -1,0 +1,49 @@
+with funnel as
+(select distinct
+org_name
+, tier
+, org_region
+, org_sales_channel
+, org_channel_group
+, org_email_segment
+, org_account_segment
+, granularity_id as org_id
+, max(indexes) as indexes
+, min(deployed_date) as deploy_date
+, min(activated_date) as activated_date
+, min(acquired_date) as first_acquired_date
+, max(acquired_date) as latest_acquired_date
+, count(distinct qualified_date) as number_of_qual
+, min(qualified_date) as first_qualified_date
+, max(qualified_date) as latest_qualified_date
+, max(queries_10k) as queries_10k
+, max(queries_10k_date) as queries_10k_date
+, max(queries_100k) as queries_100k
+, max(queries_100k_date) as queries_100k_date
+, max(queries_1m) as queries_1m
+, max(queries_1m_date) as queries_1m_date
+from
+awsdatacatalog.reporting_analytics.search_funnel sf 
+/*inner join
+	(select distinct
+	granularity_id as orgid
+	,usage_date_week_end as udw
+	, max(usage_date) as mud
+	from
+	awsdatacatalog.reporting_analytics.search_funnel 
+	group by 1,2) as iq on sf.granularity_id=iq.orgid and sf.usage_date_week_end=iq.udw and sf.usage_date=iq.mud*/
+where 1=1
+--and sf.data_date=date('2023-08-23')
+and granularity='Org'
+group by 1,2,3,4,5,6,7,8)
+
+select *,
+CONCAT(cast(YEAR(deploy_date) as varchar), '-', cast(MONTH(deploy_date) as varchar(2))) AS deployed_ym,
+CONCAT(cast(YEAR(activated_date) as varchar), '-', cast(MONTH(activated_date) as varchar(2))) AS activated_ym,
+CONCAT(cast(YEAR(first_acquired_date) as varchar), '-', cast(MONTH(first_acquired_date) as varchar(2))) AS first_acquired_ym,
+CONCAT(cast(YEAR(first_qualified_date) as varchar), '-', cast(MONTH(first_qualified_date) as varchar(2))) AS first_qualified_ym
+from funnel f
+where  (f.deploy_date is not null)
+and lower(org_name) not like lower('%adobe%')
+and year(deploy_date) >= 2022
+order by deploy_date, org_id
