@@ -1,0 +1,246 @@
+with X_ASSIGNMENT AS (
+        SELECT distinct
+            assignmentdate,
+            X_VIEWED_TREATMENT.timestamp as experiment_view_ts,
+            X_AB.org_id,
+            variant_id,
+            testgroupid,
+            exp_id,
+            testname,
+            email_segment_clean,
+            channel_group,
+            atlas_org_region,
+            payment_path,
+            pw_goal,
+            had_any_clusters_before_assignment,
+            had_paid_clusters_before_assignment,
+            org_age_till_assignment,
+            reached_aha_before_assignment,
+            reached_habit_before_assignment,
+            reached_setup_before_assignment
+        FROM
+            awsdatacatalog.ns__analytics_postprocessing.pholiota_ab_org_assignment X_AB
+        JOIN (
+            SELECT
+                fe.integrations__amplitude__groups__organization as org_id,
+                timestamp
+            from awsdatacatalog.raw_segment.cloud__segment__production_website_full_history fe
+            WHERE
+                event = 'Experiment Viewed'
+                AND fe.integrations__amplitude__groups__organization IS NOT NULL
+                AND fe.properties__test_id = '635073b349e3bc0e8d7aaa19'
+        ) X_VIEWED_TREATMENT
+        ON (
+            X_AB.org_id = X_VIEWED_TREATMENT.org_id
+            AND X_AB.assignmentdate <= X_VIEWED_TREATMENT.timestamp
+        )
+        WHERE
+            exp_id = '635073b349e3bc0e8d7aaa19'
+            AND assignmentdate IS NOT NULL
+            AND variant_id IS NOT NULL
+            AND assignmentdate between from_iso8601_timestamp('2022-11-02') and DATE('2023-03-21')
+    )
+            
+,index_created as 
+(select * from awsdatacatalog_alternative.raw_segment.cloud__segment__production_backend_full_history 
+		  where event = 'Search Index Created'
+		  and type = 'track'
+		  and integrations__amplitude__groups__organization IS NOT NULL
+		  and timestamp_transformed between DATE('2022-11-02') and DATE('2023-03-21'))
+		  
+,click_search_metrics as
+ (select distinct integrations__amplitude__groups__organization AS org_id,
+ 		 timestamp,
+         properties__action
+      	 from awsdatacatalog.raw_segment.cloud__segment__production_website_full_history fe
+      	 where fe.integrations__amplitude__groups__organization IS NOT NULL
+         and timestamp_transformed between DATE('2022-11-02') and DATE('2023-03-21')
+         and properties__action= 'View Search Metrics link clicked') 
+
+,click_search_tester as
+ (select distinct integrations__amplitude__groups__organization AS org_id,
+ 		 timestamp,
+         properties__action
+      	 from awsdatacatalog.raw_segment.cloud__segment__production_website_full_history fe
+      	 where fe.integrations__amplitude__groups__organization IS NOT NULL
+         and timestamp_transformed between DATE('2022-11-02') and DATE('2023-03-21')
+         and properties__action= 'Clicked Search Tester Tab')          
+
+ ,click_tutorial as
+ (select distinct integrations__amplitude__groups__organization AS org_id,
+ 		 timestamp,
+         properties__action
+      	 from awsdatacatalog.raw_segment.cloud__segment__production_website_full_history fe
+      	 where fe.integrations__amplitude__groups__organization IS NOT NULL
+         and timestamp_transformed between DATE('2022-11-02') and DATE('2023-03-21')
+         and properties__action= 'Clicked Use Cases Tab')         
+         
+,deploy as (select
+            granularity_id as org_id,
+            stage as event,
+            cast(ds as timestamp) AS timestamp
+        from ns__analytics_postprocessing.analytics__atlas_search_acquisition_funnel_fct
+        where stage = 'deployment'
+	          and granularity = 'organization'
+	          and ds <= DATE('2023-03-21'))
+	          
+,acquire as (select distinct granularity_id as org_id,
+            'acquisition' as event,
+            cast(ds as timestamp) as timestamp
+        from ns__analytics_postprocessing.analytics__atlas_search_usage_dim
+        where granularity = 'organization'
+        	  and days_since_acquisition=0
+              and first_ds >= DATE('2022-11-02')
+              and ds <= DATE('2023-03-21'))
+              
+,activate as (select distinct granularity_id as org_id,
+            'activation' as event,
+            min(CAST(ds AS timestamp)) AS timestamp
+        from ns__analytics_postprocessing.analytics__atlas_search_usage_dim
+        where granularity = 'organization'
+            AND lness_30d >= 10
+            and ds <= DATE('2023-03-21')
+        group by 1,2)
+        
+,qualify as (SELECT DISTINCT
+            X_CLUSTER.org_id,
+            'qualification' as event,
+            MIN(CAST(ds AS timestamp)) AS timestamp
+        FROM awsdatacatalog.ns__analytics_postprocessing.analytics__atlas_search_usage_dim X_SEARCH
+        JOIN awsdatacatalog.xform_cloud.cloud_cluster_org_dateversioned_v X_CLUSTER
+        ON (
+            X_SEARCH.granularity_id = X_CLUSTER.cluster_id
+            AND X_SEARCH.ds = X_CLUSTER.partition_date - INTERVAL '1' DAY
+        )
+        WHERE
+            granularity = 'cluster'
+            AND lness_30d >= 21
+            AND active_7d_usage >= 300
+            AND instance_size NOT IN ('SERVERLESS_V2','M0','M2','M5')
+            and ds <= DATE('2023-03-21')
+        GROUP BY 1,2)
+        
+,search_second as (
+        SELECT DISTINCT
+            granularity_id as org_id,
+            'search_2nd_day' as event,
+            MIN(CAST(ds AS timestamp)) AS timestamp
+        FROM ns__analytics_postprocessing.analytics__atlas_search_usage_dim
+        WHERE
+            granularity = 'organization'
+            AND lness_30d >= 2
+            and ds <= DATE('2023-03-21')
+        GROUP BY 1,2
+    )
+    
+,org_profile as (select org_id, partition_date
+		 ,max(regexp_extract(instance_size,'\d+')) biggest_instance
+		 ,max(case when instance_size not in ('SERVERLESS_V2','M0','M2','M5') then 1 else 0 end) as qual_instance_size
+		 from awsdatacatalog.xform_cloud.cloud_cluster_org_dateversioned_v 
+		 where date(partition_date) >= date'2022-11-02' and date(partition_date) <= date'2023-03-21'
+		 group by 1,2)
+		  
+select	  exp.assignmentdate,
+          exp.org_id,
+          exp.variant_id,
+          exp.testgroupid,
+          exp.exp_id,
+          exp.testname,
+          exp.email_segment_clean,
+          exp.channel_group,
+          exp.atlas_org_region,
+          exp.payment_path,
+          exp.pw_goal,
+          exp.had_any_clusters_before_assignment,
+          exp.had_paid_clusters_before_assignment,
+          exp.org_age_till_assignment,
+          exp.reached_aha_before_assignment,
+          exp.reached_habit_before_assignment,
+          exp.reached_setup_before_assignment,
+          exp.experiment_view_ts as experiment_view_ts,
+		  fn.tier,
+		  fn.org_sales_channel,
+		  fn.org_region,
+		  max(v.qual_instance_size) as qual_instance_size,
+		  min(fn.acquired_date) as min_acquired_dt,
+		  min(case when fn.acquired_date < date(exp.experiment_view_ts) then 1 else 0 end) as acquired_before,
+		  min(fn.activated_date) as min_activated_dt,
+		  min(case when fn.activated_date < date(exp.experiment_view_ts) then 1 else 0 end) as activated_before,
+		  min(be.timestamp) as index_created_min_ts,
+		  min(csm.timestamp) as metrics_min_ts,
+		  min(ct.timestamp) as tester_min_ts,
+		  min(cu.timestamp) as quick_start_min_ts,
+		  min(de.timestamp) as deployed_ts,
+		  min(a.timestamp) as acquired_ts,
+		  min(act.timestamp) as activated_ts,
+		  min(q.timestamp) as qualified_ts,
+		  min(s2.timestamp) as searchLness2D_ts
+		  
+		  from (select assignmentdate,
+          org_id,
+          variant_id,
+          testgroupid,
+          exp_id,
+          testname,
+          email_segment_clean,
+          channel_group,
+          atlas_org_region,
+          payment_path,
+          pw_goal,
+          had_any_clusters_before_assignment,
+          had_paid_clusters_before_assignment,
+          org_age_till_assignment,
+          reached_aha_before_assignment,
+          reached_habit_before_assignment,
+          reached_setup_before_assignment,
+          min(experiment_view_ts) as experiment_view_ts
+          from X_ASSIGNMENT
+          group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17) exp
+		  
+		 left join index_created be
+		 on exp.org_id = be.integrations__amplitude__groups__organization 
+		 and date_trunc('second', exp.experiment_view_ts) <= date_trunc('second', be.timestamp)
+		 
+		 left join click_search_metrics csm
+		 on exp.org_id = csm.org_id 
+		 and date_trunc('second', exp.experiment_view_ts) <= date_trunc('second', csm.timestamp)
+		 
+		 left join click_search_tester ct
+		 on exp.org_id = ct.org_id 
+		 and date_trunc('second', exp.experiment_view_ts) <= date_trunc('second', ct.timestamp)
+		 
+		 left join click_tutorial cu
+		 on exp.org_id = cu.org_id 
+		 and date_trunc('second', exp.experiment_view_ts) <= date_trunc('second', cu.timestamp)
+		
+		 left join deploy de
+		 on exp.org_id = de.org_id 
+		 and date_trunc('second', exp.experiment_view_ts) <= date_trunc('second', de.timestamp)	
+		 
+		 left join acquire a
+		 on exp.org_id = a.org_id 
+		 and date_trunc('second', exp.experiment_view_ts) <= date_trunc('second', a.timestamp)	
+		 
+		 left join activate act
+		 on exp.org_id = act.org_id 
+		 and date_trunc('second', exp.experiment_view_ts) <= date_trunc('second', act.timestamp)
+		 
+		 left join qualify q
+		 on exp.org_id = q.org_id 
+		 and date_trunc('second', exp.experiment_view_ts) <= date_trunc('second', q.timestamp)	
+		 
+		 left join search_second s2
+		 on exp.org_id = s2.org_id 
+		 and date_trunc('second', exp.experiment_view_ts) <= date_trunc('second', s2.timestamp)	
+		 
+		 left join (select * from awsdatacatalog.reporting_analytics.search_funnel 
+		 where granularity = 'Org' and usage_date>=date'2022-11-02' and usage_date <= date'2023-03-21') fn
+		 on exp.org_id = fn.granularity_id  
+		 and date(exp.experiment_view_ts) = fn.usage_date
+		 
+		 left join org_profile v
+		 on exp.org_id = v.org_id 
+		 and date(exp.experiment_view_ts) = v.partition_date
+		 
+		 group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21
+		 order by org_id, assignmentdate
