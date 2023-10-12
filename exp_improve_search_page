@@ -64,7 +64,8 @@ with X_ASSIGNMENT AS (
       	 from awsdatacatalog.raw_segment.cloud__segment__production_website_full_history fe
       	 where fe.integrations__amplitude__groups__organization IS NOT NULL
          and timestamp_transformed between DATE('2022-11-02') and DATE('2023-03-21')
-         and properties__action= 'Clicked Search Tester Tab')          
+         and properties__action= 'Clicked Search Tester Tab'
+         and properties__context='Search Indexes Page - Atlas Search Page')          
 
  ,click_tutorial as
  (select distinct integrations__amplitude__groups__organization AS org_id,
@@ -73,7 +74,8 @@ with X_ASSIGNMENT AS (
       	 from awsdatacatalog.raw_segment.cloud__segment__production_website_full_history fe
       	 where fe.integrations__amplitude__groups__organization IS NOT NULL
          and timestamp_transformed between DATE('2022-11-02') and DATE('2023-03-21')
-         and properties__action= 'Clicked Use Cases Tab')         
+         and properties__action= 'Clicked Use Cases Tab'
+         and properties__context='Search Indexes Page - Atlas Search Page')         
          
 ,deploy as (select
             granularity_id as org_id,
