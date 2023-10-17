@@ -1,0 +1,71 @@
+with base1 as (select  
+a.ds,
+a.granularity,
+a.granularity_id,
+v.instance_size,
+v.cluster_name,
+v.org_name,
+lness_30d,
+a.active_1d_usage,
+a.active_7d_usage,
+a.active_14d_usage,
+a.active_30d_usage,
+a.active_90d_usage,
+g.workload_created_date,
+g.workload_id,
+date_diff('day',workload_created_date,a.ds) as days_since_workload_creation
+from awsdatacatalog.ns__analytics_postprocessing.analytics__atlas_search_usage_dim a
+join awsdatacatalog.product_analytics.ms_search_comp_cluster_grading_table g 
+on g.granularity_id = a.granularity_id 
+and g.ds = current_date - interval'2'day
+left join awsdatacatalog.xform_cloud.cloud_cluster_org_dateversioned_v v 
+on a.granularity_id = v.cluster_id 
+and a.ds = v.partition_date 
+where 1=1
+and a.granularity = 'cluster')
+
+
+,base as (select 
+*,
+case when days_since_workload_creation = -15 then active_7d_usage else 0 end as fifteen,
+case when days_since_workload_creation = -30 then active_7d_usage else 0 end as thirty,
+case when days_since_workload_creation = -90 then active_7d_usage else 0 end as ninety,
+case when days_since_workload_creation = -180 then active_7d_usage else 0 end as one_hundred_eighty
+from base1)
+
+,aggs as (select 
+granularity_id,
+workload_id,
+workload_created_date,
+MAX(fifteen) as fifteen,
+MAX(thirty) as thirty,
+MAX(ninety) as ninety,
+MAX(one_hundred_eighty) as one_hundred_eighty
+from base 
+group by 1,2,3)
+
+select
+g.*,
+case when g.search_type='Attach' and g.creation_instance_size='M20' then 1 else 0 end as M20_creation_instance,
+mbr.activation_ds,
+case when (mbr.activation_ds < g.workload_created_date and date_diff('day',g.workload_created_date,mbr.activation_ds) >= -45) then 1 else 0 end as prior_activated_45d,
+a.fifteen,
+a.thirty,
+a.ninety,
+a.one_hundred_eighty,
+case when a.fifteen < 300 then 1 else 0 end as prior15d_queries_less300,
+case when a.thirty < 300 then 1 else 0 end as prior30d_queries_less300,
+case when a.ninety < 300 then 1 else 0 end as prior90d_queries_less300,
+case when a.fifteen > 0 and (g.current_week/a.fifteen) >= 3 then 1 
+	 when a.thirty > 0 and (g.current_week/a.thirty) >= 3 then 1
+	 when a.ninety > 0 and (g.current_week/a.ninety) >= 3 then 1
+	 else 0 end as volume_3x
+from  awsdatacatalog.product_analytics.ms_search_comp_cluster_grading_table g
+left join aggs a 
+on a.workload_id = g.workload_id 
+and a.granularity_id = g.granularity_id 
+left join awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2  mbr 
+on mbr.cluster_id = g.granularity_id 
+and mbr.ds = (select max(ds) from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2)
+where g.ds = current_date - interval'2'day
+order by g.workload_id
