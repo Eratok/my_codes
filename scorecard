@@ -3,14 +3,15 @@
 
 -- Overall WoW growth
 
-@set tw_date = date'2023-10-14'
-@set lw_date = date'2023-10-07'
+@set tw_date = date'2023-10-28'
+@set lw_date = date'2023-10-21'
 
 
 select cluster_grade channel, ds
 	, count(distinct case when cluster_grade = 'Sales-Led Sales' then org_wl_id else org_id end) qorgs, count(cluster_id) clusters, sum(mrr__total*12) qarr
 --from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo
-from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl
+from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl_temp
+
 where ds in (:lw_date, :tw_date)
 	and qualification_flg = 1
 group by 1, 2
@@ -23,13 +24,13 @@ order by 1, 2
 
 with base as (
 	select org_id, org_name, ds
---		, sales_channel channel
-		, cluster_grade channel
+		, sales_channel channel
+--		, cluster_grade channel
 		, sum(mrr__total) qmrr, count(cluster_id) qclusters, sum(active_7d_usage) qvolume, max(qualification_flg) qual_flg
 		, max(cast(regexp_extract(instance_size, '\d+') as int)) biggest_instance
 --	from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2
 --	from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo 
-	from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl
+	from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl_temp
 	where 1=1
 --	and ds > date'2023-07-01'
 	and qualification_flg = 1
@@ -46,7 +47,7 @@ with base as (
 			select org_id, ds, sum(active_7d_usage) org_volume, min(qualification_ds) qual_ds, max(qualification_ds) latest_qual_ds, sum(search_index_count) index_count
 		--	from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2
 --			from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo 
-			from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl
+			from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl_temp
 			where ds in (:lw_date, :tw_date)
 			group by 1, 2
 		)
@@ -120,15 +121,24 @@ group by 1, 2, 3
 
 
 -- Org lookup
-
-select ds, cluster_id, cluster_name, org_id, org_name, instance_size, sales_channel, cluster_grade, active_7d_usage, lness_30d, total_data_indexed, search_index_count, mrr__total, mrr__total*12 aarr, qualification_flg, qualification_ds
+select *
+from
+(select ds, cluster_id, cluster_name, org_id, org_name, instance_size
+, sales_channel, cluster_grade, active_7d_usage, lness_30d, total_data_indexed, search_index_count, mrr__total, mrr__total*12 aarr, qualification_flg, qualification_ds
+, lag(sales_channel,1) OVER (PARTITION BY cluster_id ORDER BY ds) last_sales_channel
+, lag(cluster_grade,1) OVER (PARTITION BY cluster_id ORDER BY ds) last_cluster_grade
+, lag(aarr,1) OVER (PARTITION BY cluster_id ORDER BY ds) last_aarr
+, lag(qualification_flg,1) OVER (PARTITION BY cluster_id ORDER BY ds) last_qualification_flg
+from
+(select ds, cluster_id, cluster_name, org_id, org_name, instance_size
+, sales_channel, cluster_grade, active_7d_usage, lness_30d, total_data_indexed, search_index_count, mrr__total, mrr__total*12 aarr, qualification_flg, qualification_ds
 --from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2
 --from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo
-from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl
-where ds in (date'2023-09-23', date'2023-09-30',date'2023-10-07',date'2023-10-14')
-and org_id = '5d4c9574c56c98bc5446264f'
-order by 2, 1 desc
-
+from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl_temp
+where ds in (date'2023-10-21',date'2023-10-28')
+order by 1,2) tmp) tmp2
+where ds=date'2023-10-28' and qualification_flg = 1
+order by org_id
 
 
 select ds, cluster_id, cluster_name, org_id, org_name, instance_size, sales_channel, active_7d_usage, lness_30d, total_data_indexed, search_index_count, mrr__total, mrr__total*12 aarr, qualification_flg, qualification_ds
@@ -203,7 +213,7 @@ with lw as (
 		, cluster_grade channel
 		, instance_size, total_data_indexed, search_index_count, mrr__total, active_7d_usage
 --	from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2 mbr
-	from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl mbr
+	from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl_temp mbr
 	LEFT join (
         SELECT account_id, account_name
         FROM awsdatacatalog.xform_sales.sfdc_account_v
@@ -216,7 +226,7 @@ with lw as (
 	select cluster_id, group_id, instance_size, total_data_indexed, search_index_count, mrr__total, active_7d_usage
 		, sum(active_7d_usage) over(partition by org_id, ds) org_usage
 --	from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2 mbr
-	from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl mbr
+	from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl_temp mbr
 	where ds = :tw_date
 )
 , base as (
@@ -265,7 +275,7 @@ with lw as (
 		, count(cluster_id) q_clusters, sum(total_data_indexed) index_size, sum(search_index_count) index_count, sum(mrr__total*12) q_aarr, sum(active_7d_usage) weekly_volume
 --	from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2 mbr
 --	from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo mbr
-	from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl mbr
+	from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl_temp mbr
 	LEFT join (
         SELECT account_id, account_name
         FROM awsdatacatalog.xform_sales.sfdc_account_v
@@ -287,7 +297,7 @@ with lw as (
 				, sum(mrr__total*12) filter(where qualification_flg = 1) q_arr_tw
 		--	from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2
 		--	from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo 
-			from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl
+			from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl_temp
 			where ds in ( :lw_date, :tw_date)
 --				and search_index_count is not null
 --				and active_7d_usage is not null
@@ -328,7 +338,7 @@ quals as (
 	select org_id, min(qualification_ds) qual_ds
 --	from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo 
 --	from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2
-	from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl
+	from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl_temp
 	where ds = :tw_date
 	group by 1
 )
@@ -338,7 +348,7 @@ quals as (
 		, cluster_grade channel
 		, sum(total_data_indexed) index_size, sum(search_index_count) index_count, sum(mrr__total*12) qarr, sum(active_7d_usage) qvol
 --	from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo
-	from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl
+	from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl_temp
 	where ds >= :tw_date - interval '60' day 
 		and day_of_week(ds) = 6
 		and qualification_flg = 1
@@ -365,7 +375,7 @@ with quals as (
 			, cluster_grade channel
 			, sum(mrr__total*12) qarr
 --		from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo 
-		from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl
+		from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl_temp
 		where day_of_week(ds) = 6
 			and qualification_flg =1
 		group by 1, 2, 3
@@ -378,7 +388,7 @@ with quals as (
 	from (
 		select ds, org_id, coalesce(sum(active_7d_usage), 0) vol, coalesce(sum(search_index_count), 0) indexes
 --		from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo 
-		from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl
+		from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl_temp
 		where day_of_week(ds) = 6
 		group by 1, 2
 	)
@@ -411,7 +421,7 @@ with quals as (
 			, cluster_grade channel
 			, sum(mrr__total*12) qarr
 --		from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo 
-		from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl
+		from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl_temp
 		where day_of_week(ds) = 6
 			and qualification_flg =1
 		group by 1, 2, 3, 4
@@ -423,7 +433,7 @@ with quals as (
 	from (
 		select ds, org_id, sum(active_7d_usage) vol
 --		from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo 
-		from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl
+		from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl_temp
 		where day_of_week(ds) = 6
 		group by 1, 2
 	)
