@@ -1,0 +1,126 @@
+
+with base as (select org_id
+							   ,properties__context
+							   ,properties__action
+							   ,first_action_ts
+							   ,rank_action
+						from
+						(select org_id
+							   ,properties__context
+							   ,properties__action
+							   ,first_action_ts
+							   ,row_number() over (partition by org_id order by first_action_ts) as rank_action
+						
+						from
+						(select org_id
+						,properties__context
+						,properties__action
+						,min(ts) as first_action_ts
+						
+						from
+						((select distinct integrations__amplitude__groups__organization AS org_id,
+								 		 timestamp as ts,
+								 		 properties__context as properties__context,
+								         (properties__action) as properties__action
+								         from awsdatacatalog.raw_segment.cloud__segment__production_website_full_history fe
+								      	 where fe.integrations__amplitude__groups__organization IS NOT NULL
+								         and timestamp_transformed between current_date - interval '90' day and current_date
+								         and properties__context='Search Tester - Query Syntax Editor' and properties__action= 'Clicked Search')
+						union all
+								         
+						(select distinct integrations__amplitude__groups__organization AS org_id,
+								 		 timestamp as ts,
+								 		 properties__context as properties__context,
+								         (properties__action) as properties__action
+								         from awsdatacatalog.raw_segment.cloud__segment__production_website_full_history fe
+								      	 where fe.integrations__amplitude__groups__organization IS NOT NULL
+								         and timestamp_transformed between current_date - interval '90' day and current_date
+								         and properties__context='Search Indexes Page - Search Tester' and properties__action= 'Clicked Search')) acts	
+						group by 1,2,3) agg) fn
+						where rank_action = 1
+						order by org_id, first_action_ts)
+
+,deploy as (select
+            granularity_id as org_id,
+            stage as event,
+            cast(ds as timestamp) AS timestamp
+        from ns__analytics_postprocessing.analytics__atlas_search_acquisition_funnel_fct
+        where stage = 'deployment'
+	          and granularity = 'organization')
+	          
+,acquire as (select distinct granularity_id as org_id,
+            'acquisition' as event,
+            cast(ds as timestamp) as timestamp
+        from ns__analytics_postprocessing.analytics__atlas_search_usage_dim
+        where granularity = 'organization'
+        	  and days_since_acquisition=0)
+              
+,activate as (select distinct granularity_id as org_id,
+            'activation' as event,
+            min(CAST(ds AS timestamp)) AS timestamp
+        from ns__analytics_postprocessing.analytics__atlas_search_usage_dim
+        where granularity = 'organization'
+            AND lness_30d >= 10
+        group by 1,2)
+        
+,qualify as (SELECT DISTINCT
+            X_CLUSTER.org_id,
+            'qualification' as event,
+            MIN(CAST(ds AS timestamp)) AS timestamp
+        FROM awsdatacatalog.ns__analytics_postprocessing.analytics__atlas_search_usage_dim X_SEARCH
+        JOIN awsdatacatalog.xform_cloud.cloud_cluster_org_dateversioned_v X_CLUSTER
+        ON (
+            X_SEARCH.granularity_id = X_CLUSTER.cluster_id
+            AND X_SEARCH.ds = X_CLUSTER.partition_date - INTERVAL '1' DAY
+        )
+        WHERE
+            granularity = 'cluster'
+            AND lness_30d >= 21
+            AND active_7d_usage >= 300
+            AND instance_size NOT IN ('SERVERLESS_V2','M0','M2','M5')
+        GROUP BY 1,2)
+
+select   fn.date_action
+		 ,fn.properties__context  
+	     ,fn.properties__action
+	     ,fn.deployed
+	     ,fn.acquired
+	     ,fn.activated
+	     ,fn.activated_after
+	     ,fn.qualified
+	     ,count(fn.org_id) as orgs
+from       
+(select b.org_id
+	  ,b.properties__context
+	  ,b.properties__action
+	  ,cast(b.first_action_ts as date) as date_action
+	  ,b.first_action_ts
+	  ,(de.timestamp) as deployed_ts
+	  ,case when (de.timestamp) <= b.first_action_ts then 1 else 0 end deployed
+	  ,(a.timestamp) as acquired_ts
+ 	  ,case when (a.timestamp) <= b.first_action_ts then 1 else 0 end acquired
+	  ,(act.timestamp) as activated_ts
+	  ,case when (act.timestamp) <= b.first_action_ts then 1 else 0 end activated
+	  ,case when (act.timestamp) >= b.first_action_ts then 1 else 0 end activated_after
+	  ,(q.timestamp) as qualified_ts
+	  ,case when (q.timestamp) <= b.first_action_ts then 1 else 0 end qualified
+		  
+		  from base b
+		  
+		 left join deploy de
+		 on b.org_id = de.org_id 
+	
+		 left join acquire a
+		 on b.org_id = a.org_id 
+		 
+		 left join activate act
+		 on b.org_id = act.org_id 
+		 
+		 left join qualify q
+		 on b.org_id = q.org_id) fn
+
+group by 1,2,3,4,5,6,7,8
+order by date_action
+		         
+		         
+ 
