@@ -1,463 +1,259 @@
--- Weekly Scorecard
-
-
--- Overall WoW growth
-
-@set tw_date = date'2023-11-04'
-@set lw_date = date'2023-10-28'
-
-
-select cluster_grade channel, ds
-	, count(distinct case when cluster_grade = 'Sales-Led Sales' then org_wl_id else org_id end) qorgs, count(cluster_id) clusters, sum(mrr__total*12) qarr
---from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo
-from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl
-
-where ds in (:lw_date, :tw_date)
-	and qualification_flg = 1
-group by 1, 2
-order by 1, 2
-
-
-
--- WoW segmented breakdown
-
-
-with base as (
-	select org_id, org_name, ds
---		, sales_channel channel
-		, cluster_grade channel
-		, sum(mrr__total) qmrr, count(cluster_id) qclusters, sum(active_7d_usage) qvolume, max(qualification_flg) qual_flg
-		, max(cast(regexp_extract(instance_size, '\d+') as int)) biggest_instance
---	from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2
---	from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo 
-	from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl
-	where 1=1
---	and ds > date'2023-07-01'
-	and qualification_flg = 1
-	group by 1, 2, 3, 4
---	having qvolume > 0
-)
-, current as (
-	select org_id, org_volume, org_volume_lw, index_count, index_count_lw, qual_ds, latest_qual_ds
-	from (
-		select org_id, ds, qual_ds, latest_qual_ds, org_volume, index_count
-			, lag(org_volume) over(partition by org_id order by ds) org_volume_lw
-			, lag(index_count) over(partition by org_id order by ds) index_count_lw
-		from (
-			select org_id, ds, sum(active_7d_usage) org_volume, min(qualification_ds) qual_ds, max(qualification_ds) latest_qual_ds, sum(search_index_count) index_count
-		--	from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2
---			from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo 
-			from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl
-			where ds in (:lw_date, :tw_date)
-			group by 1, 2
-		)
-	)
-	where ds = :tw_date
-)
-, comp as (
-	select coalesce(b.org_id, a.org_id) org_id, 
-		coalesce(b.org_name, a.org_name) org_name,
-		 a.channel channel_lw,
-		 b.channel channel_tw,
-		aarr_lw, aarr_tw, coalesce(aarr_tw,0)-coalesce(aarr_lw,0) aarr_wow,
-		qc_lw, qc_tw, coalesce(qc_tw,0)-coalesce(qc_lw,0) qc_wow,
-		qvolume_lw, qvolume_tw, 
-		qual_ds,
-		latest_qual_ds,
-		biggest_instance_lw, biggest_instance_tw,
-		qual_flg_lw, qual_flg_tw,
-		coalesce(org_volume, 0) org_volume,
-		coalesce(org_volume_lw, 0) org_volume_lw,
-		coalesce(index_count, 0) index_count,
-		coalesce(index_count_lw, 0) index_count_lw
-	from (
-		select org_id, org_name, channel, qmrr*12 aarr_lw, qclusters qc_lw, qvolume qvolume_lw, biggest_instance biggest_instance_lw, qual_flg qual_flg_lw
-		from base
-		where ds = :lw_date
-	) a full outer join (
-		select org_id, org_name, channel, qmrr*12 aarr_tw, qclusters qc_tw, qvolume qvolume_tw, biggest_instance biggest_instance_tw, qual_flg qual_flg_tw
-		from base
-		where ds = :tw_date
-	) b on a.org_id = b.org_id
-		and a.channel = b.channel	
-	left join current 
-		on coalesce(a.org_id, b.org_id) = current.org_id
-)
--- select *
--- from comp
--- where 1=1
--- 	and ( (org_volume = 0 and org_volume_lw > 0) or (index_count = 0 and index_count_lw > 0) )
-select 
-	case 
-		when ( (org_volume = 0 and org_volume_lw > 0) or (index_count = 0 and index_count_lw > 0) ) then 'Churned Org'
-		when qc_wow > 0 then
-			case
-				when qual_ds between :lw_date and :tw_date then 'Newly qualified Org'
-				when latest_qual_ds between :lw_date and :tw_date then 'Newly qualified Cluster'
-				when qc_lw is null then 'Re-qualified Org'
-				else 'Re-qualified Cluster'
-			end
-		when qc_wow < 0 then 
-			case
-				when qvolume_tw > 0 then 'Lapsed on 1 or more clusters'
-				when (qvolume_tw is null or qvolume_tw = 0) then 'Lapsed on all clusters'
-				else 'Unknown'
-			end
-		else
-			case 
-				when biggest_instance_tw > biggest_instance_lw then 'Cluster(s) upgraded'
-				when biggest_instance_tw < biggest_instance_lw then 'Cluster(s) downgraded'
-				else 'Non-Search related ARR change'
-			end		
-	end org_status
-	, channel_lw, channel_tw
-	, count(org_id) orgs
-	, sum(aarr_wow) aarr_wow
-	, sum(qc_wow) qc_wow
-from comp
-group by 1, 2, 3
-
-
--- Org lookup
-
-select ds, cluster_id, cluster_name, org_id, org_name, instance_size, sales_channel, cluster_grade, active_7d_usage, lness_30d, total_data_indexed, search_index_count, mrr__total, mrr__total*12 aarr, qualification_flg, qualification_ds
---from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2
---from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo
-from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl
-where ds in (date'2023-11-04', date'2023-10-28', date'2023-10-21', date'2023-10-14')
-and org_id = '628df1a0ccbf081ff5d4ad31'
-order by 2, 1 desc
+with base1 as(
 
 select *
+from
+(select distinct t1.extracted_at
+,t1.account_name
+,t1.acctid
+,t1.opp_id
+,t1.workload_id 
+,t1.wl_create_date
+,t1.opp_close_date
+,t1.csm_approve_date
+,t1.stage
+,t1.onboarding_status__c 
+,t1.searchimportance
+,t1.wl_type
+,t1.est_12m_arr
+,t1.search_query_volume_rolling_7_day__c
+,t1.weeks_above_300_search_queries__c
+,t1.weeks_above_10_000_search_queries__c
+,t1.weeks_above_100_000_search_queries__c
+,t2.cluster_id
+,t2.activation_or_usage_eligible
+,row_number() over(partition by t2.cluster_id order by wl_create_date) as row_workload
+from awsdatacatalog.ns__analytics_postprocessing.v_tableau_atlas_search_workloads t1
+left join (select w.workload_id, w.cluster_id, e.activation_or_usage_eligible
+from
+(select distinct granularity_id as workload_id, cluster_id, cluster_deployment_date 
 from awsdatacatalog.product_analytics.ms_search_workloads_base
-where org_id ='628df1a0ccbf081ff5d4ad31'
+where granularity ='workload') w
+join (select distinct workload_id,
+granularity_id as cluster_id,
+activation_or_usage_eligible,
+search_type_eligibility
+from awsdatacatalog.product_analytics.ms_search_comp_cluster_final
+where ds = date'2023-08-31') e
+on w.cluster_id = e.cluster_id
+and e.activation_or_usage_eligible = 1) t2
+on t1.workload_id=t2.workload_id
+where t1.workload_id is not null) tmp
+where month(wl_create_date) >= 1 and year(wl_create_date)>=2023
+order by acctid, wl_create_date
+)
 
--- migrations
-select *
-from
-(select ds, cluster_id, cluster_name, org_id, org_name, instance_size
-, sales_channel, cluster_grade, active_7d_usage, lness_30d, total_data_indexed, search_index_count, mrr__total, mrr__total*12 aarr, qualification_flg, qualification_ds
-, lag(sales_channel,1) OVER (PARTITION BY cluster_id ORDER BY ds) last_sales_channel
-, lag(cluster_grade,1) OVER (PARTITION BY cluster_id ORDER BY ds) last_cluster_grade
-, lag(aarr,1) OVER (PARTITION BY cluster_id ORDER BY ds) last_aarr
-, lag(qualification_flg,1) OVER (PARTITION BY cluster_id ORDER BY ds) last_qualification_flg
-from
-(select ds, cluster_id, cluster_name, org_id, org_name, instance_size
-, sales_channel, cluster_grade, active_7d_usage, lness_30d, total_data_indexed, search_index_count, mrr__total, mrr__total*12 aarr, qualification_flg, qualification_ds
---from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2
---from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo
-from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl
-where ds in (:lw_date, :tw_date)
-) tmp) tmp2
-where ds=:tw_date and qualification_flg = 1
-order by org_id
+,base as (
 
+select b.extracted_at
+,b.account_name
+,b.acctid
+,b.opp_id
+,b.workload_id 
+,b.wl_create_date
+,b.opp_close_date
+,b.csm_approve_date
+,b.stage
+,b.onboarding_status__c 
+,b.searchimportance
+,b.wl_type
+,b.est_12m_arr
+,b.search_query_volume_rolling_7_day__c
+,b.weeks_above_300_search_queries__c
+,b.weeks_above_10_000_search_queries__c
+,b.weeks_above_100_000_search_queries__c
+,b.row_workload
+,s.cluster_id
+from base1 b
+left join 
+(select * from base1 where ((cluster_id is not null and row_workload=1) or cluster_id is null)) s
+on b.workload_id = s.workload_id
+order by b.acctid, b.wl_create_date
+)
 
-select ds, cluster_id, cluster_name, org_id, org_name, instance_size, sales_channel, active_7d_usage, lness_30d, total_data_indexed, search_index_count, mrr__total, mrr__total*12 aarr, qualification_flg, qualification_ds
---from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2
-from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo
-where ds in (date'2023-08-26')
-and lower(org_name) like '%moveecar%'
-order by 2, 1 desc
+,search_usage as (
 
-
-
-select ds, atlas_org_name, active_7d_usage
-from awsdatacatalog.ns__analytics_postprocessing.analytics__atlas_search_kpi_usage_dim 
-where ds >= date'2023-05-01'
-and granularity_id = '5e811b475665404ef08b0d22'
-order by 1 desc
-
-
-
-select ds, org_id, org_name, sales_channel, sum(active_7d_usage), sum(total_data_indexed), sum(search_index_count), sum(mrr__total), sum(mrr__total*12) aarr
+select cluster_id, deployment_ds, deployed_flg, acquisition_ds, activation_ds, qualification_ds, qualification_flg
+,mrr__total ,active_7d_usage ,total_data_indexed 
 from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2
---from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo
-where ds >= date'2023-08-01'
-and org_id = '5bcdd477f2a30b892b74b437'
-and qualification_flg = 1
-group by 1, 2, 3, 4
-order by 1 desc
-
-
-
--- Cluster lookup
-
-select ds, active_7d_usage, active_1d_usage, lness_30d, first_ds, mrr__total
-from awsdatacatalog.ns__analytics_postprocessing.analytics__atlas_search_kpi_usage_dim 
-where ds >= date'2023-02-01'
-and granularity = 'cluster'
-and granularity_id = '5e82c2d7b2fbdd779fa8081e'
-order by 1 desc
-
-
-select partition_date, is_sharding, cluster_deleted_at, instance_size, cluster_name, org_id
-from awsdatacatalog.xform_cloud.cloud_cluster_org_dateversioned_v 
-where partition_date >= date'2023-02-01'
-and cluster_id = '5e82c2d7b2fbdd779fa8081e'
-order by 1 desc
-
-
-
-select *
---from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2 
-from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl
-where 1=1
---and ds in (date'2023-09-02', date'2023-09-09', date'2023-09-16')
-and cluster_id = '622020773404041245a51238'
-order by ds desc
-
-
-
-select *
-from awsdatacatalog.product_analytics.ms_search_org_mapping_final_version_dateversioned 
-where cluster_id = '5bd30650d5ec13cc20af425c'
-order by processed_date 
-
-
-
-
--- Search usage Contractions 
-
-with lw as (
-	select cluster_id, cluster_name, coalesce(account_name, org_name) org_name
---		, sales_channel channel
-		, cluster_grade channel
-		, instance_size, total_data_indexed, search_index_count, mrr__total, active_7d_usage
---	from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2 mbr
-	from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl mbr
-	LEFT join (
-        SELECT account_id, account_name
-        FROM awsdatacatalog.xform_sales.sfdc_account_v
-    ) b ON mbr.sfdc_account_id = b.account_id	
-	where ds = :lw_date
-	and qualification_flg = 1
-	and active_7d_usage > 0
+where ds = date_add('day',-3,current_date)
 )
-, tw as (
-	select cluster_id, group_id, instance_size, total_data_indexed, search_index_count, mrr__total, active_7d_usage
-		, sum(active_7d_usage) over(partition by org_id, ds) org_usage
---	from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2 mbr
-	from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl mbr
-	where ds = :tw_date
+
+
+,prod_model as (
+
+select cluster_id, production_flag
+from awsdatacatalog.data_science.prod_production_identification_results
+where measured_at = date_add('day',-3,current_date)
 )
-, base as (
-	select cluster_id, cluster_name, org_name, channel, group_id
-		, coalesce(tw.instance_size, lw.instance_size) instance_size_tw
-		, lw.instance_size instance_size_lw
-		, coalesce(tw.total_data_indexed, 0) index_size_tw
-		, lw.total_data_indexed index_size_lw
-		, coalesce(tw.search_index_count, 0) index_count_tw
-		, lw.search_index_count index_count_lw
-		, coalesce(tw.mrr__total, 0)*12 arr_tw
-		, lw.mrr__total*12 arr_lw
-		, coalesce(tw.active_7d_usage, 0) search_volume_tw
-		, lw.active_7d_usage search_volume_lw
-		, org_usage org_usage_tw
-	from lw left join tw
-	using (cluster_id)
+
+,workload_arr AS (
+
+select w.workload__c as workload_id,
+		sum(mrr_total)*12 as total_arr
+from awsdatacatalog.raw_sfdc.dw__sfdc__workload_cluster__c as w
+left join (select
+			cluster_id
+			,date(usage_date) as usage_date
+			,mrr__total AS mrr_total
+			from awsdatacatalog.ns__analytics_postprocessing.analytics__atlas__mrr_daily
+			where date(usage_date) = date_add('day',-3,current_date)) as m
+on w.cluster_id__c = m.cluster_id
+group by 1
 )
-select a.cluster_id, a.cluster_name, org_name, channel, group_id
-	, search_volume_tw, search_volume_lw
-	, search_volume_tw - search_volume_lw search_volume_diff
-	, search_volume_tw / (search_volume_lw*1.00) -1 search_volume_growth, org_usage_tw
-	, index_size_tw, index_size_lw, arr_tw, arr_lw, index_count_tw, index_count_lw, instance_size_tw, instance_size_lw
-	, CASE
-        WHEN c.production_flag = TRUE THEN 'Y'
-        ELSE 'N'
-    END production_flg
-from base a
-LEFT JOIN awsdatacatalog.data_science.prod_production_identification_results c 
-ON (
-    a.cluster_id = c.cluster_id
-    AND date(c.scored_date) = :tw_date
+
+,joined_table as (
+
+select distinct b.extracted_at
+,b.account_name  
+,b.acctid
+,b.opp_id
+,b.workload_id 
+,b.wl_create_date
+,b.opp_close_date
+,b.csm_approve_date
+,b.stage
+,b.onboarding_status__c 
+,b.searchimportance
+,b.wl_type
+,b.est_12m_arr
+,b.search_query_volume_rolling_7_day__c
+,b.weeks_above_300_search_queries__c
+,b.weeks_above_10_000_search_queries__c
+,b.weeks_above_100_000_search_queries__c
+,s.cluster_id
+,s.deployment_ds
+,s.acquisition_ds 
+,s.activation_ds
+,s.qualification_ds
+,(case when s.deployment_ds is not null then 1 else 0 end) as deployed
+,(case when s.acquisition_ds is not null then 1 else 0 end) as acquired
+,(case when s.activation_ds is not null then 1 else 0 end) as activated
+,(case when s.qualification_ds is not null then 1 else 0 end) as qualified
+,coalesce(s.qualification_flg,0) as qualification_flg
+,coalesce(s.mrr__total,0) as  mrr__total
+,coalesce(s.active_7d_usage,0) as active_7d_usage
+,coalesce(s.total_data_indexed,0) as total_data_indexed
+,case when p.production_flag = true then 1 else 0 end production_flag
+from base b
+left join search_usage s
+on b.cluster_id = s.cluster_id
+left join prod_model p
+on s.cluster_id = p.cluster_id
+order by account_name, wl_create_date, deployment_ds
 )
-where search_volume_tw / (search_volume_lw*1.00) -1 < -0.95
-order by 8, 9
 
 
+,final_table as (
 
-
--- Churned Orgs
-
-with lw as (
-	select org_id, coalesce(account_name, org_name) org_name
---		, sales_channel
-		, cluster_grade channel
-		, count(cluster_id) q_clusters, sum(total_data_indexed) index_size, sum(search_index_count) index_count, sum(mrr__total*12) q_aarr, sum(active_7d_usage) weekly_volume
---	from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2 mbr
---	from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo mbr
-	from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl mbr
-	LEFT join (
-        SELECT account_id, account_name
-        FROM awsdatacatalog.xform_sales.sfdc_account_v
-    ) b ON mbr.sfdc_account_id = b.account_id	
-	where ds = :lw_date
-	and qualification_flg = 1
-	and search_index_count > 0
-	group by 1, 2, 3
+select *, row_number() over(partition by workload_id order by funnel_steps desc, deployment_ds) as row_funnel
+from
+(select distinct extracted_at
+,account_name  
+,acctid
+,opp_id
+,workload_id 
+,wl_create_date
+,opp_close_date
+,csm_approve_date
+,stage
+,onboarding_status__c 
+,searchimportance
+,wl_type
+,est_12m_arr
+,search_query_volume_rolling_7_day__c
+,weeks_above_300_search_queries__c
+,weeks_above_10_000_search_queries__c
+,weeks_above_100_000_search_queries__c
+,cluster_id
+,deployment_ds
+,acquisition_ds 
+,activation_ds
+,qualification_ds
+,deployed
+,acquired
+,activated
+,qualified
+,(deployed+acquired+activated+qualified) as funnel_steps
+,qualification_flg
+,mrr__total
+,active_7d_usage
+,total_data_indexed
+,production_flag
+from joined_table) tmp
+order by account_name, wl_create_date, deployment_ds
 )
-, tw as (
-	select *
-	from (
-		select *
-			, coalesce(lag(index_count_tw) over(partition by org_id order by ds), 0) index_count_lw
-			, coalesce(lag(weekly_volume_tw) over(partition by org_id order by ds), 0) weekly_volume_lw
-		from (
-			select ds, org_id, org_name, sum(total_data_indexed) index_size_tw, coalesce(sum(search_index_count), 0) index_count_tw, sum(mrr__total*12) aarr_tw, coalesce(sum(active_7d_usage), 0) weekly_volume_tw
-				, sum(mrr__total*12) filter(where qualification_flg = 1) q_arr_tw
-		--	from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2
-		--	from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo 
-			from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl
-			where ds in ( :lw_date, :tw_date)
---				and search_index_count is not null
---				and active_7d_usage is not null
---				and search_index_count * active_7d_usage > 0
-			group by 1, 2, 3
-		)
-	)
-	where ds = :tw_date
---		and org_id = '628d417611801029aa0123c2'
-)
-select org_id, lw.*, index_size_tw, index_count_tw, aarr_tw, q_arr_tw
-from lw left join tw
-using (org_id)
-where ((weekly_volume_tw = 0 and weekly_volume_lw > 0) or (index_count_tw = 0 and index_count_lw > 0))
-order by 7 desc
 
-
-
-
---Org migrators
-
-select ds, org_id, org_name, sales_channel, sum(active_7d_usage) q_volume, sum(total_data_indexed), sum(search_index_count), sum(mrr__total), sum(mrr__total*12) aarr
-from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2
-where ds in (date'2023-07-29', date'2023-08-05', date'2023-08-12')
-and org_id in ('5bbf4bc2014b763f913f524d', '64c3a0fcfa2eeb3f28c17464')
-and qualification_flg = 1
-group by 1, 2, 3, 4
-order by 2, 1 desc
-
-
-
-
--- Newly qualified
-
-
-with 
-quals as (
-	select org_id, min(qualification_ds) qual_ds
---	from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo 
---	from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2
-	from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl
-	where ds = :tw_date
-	group by 1
-)
-, tw as (
-	select ds, org_id, org_name
---		, sales_channel channel
-		, cluster_grade channel
-		, sum(total_data_indexed) index_size, sum(search_index_count) index_count, sum(mrr__total*12) qarr, sum(active_7d_usage) qvol
---	from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo
-	from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl
-	where ds >= :tw_date - interval '60' day 
-		and day_of_week(ds) = 6
-		and qualification_flg = 1
-	group by 1, 2, 3, 4
-)
-select ds, channel
-	, count(org_id) orgs
-	, sum(qarr) qarr
-from tw join quals
-using (org_id)
-where qual_ds between ds - interval'6' day and ds
-group by 1, 2
-order by 1, 2
-
-
-
--- Churned
-
-with quals as (
-	select *, lead(qarr) over(partition by org_id order by ds) tw_qarr
-	from (
-		select ds, org_id
---			, sales_channel
-			, cluster_grade channel
-			, sum(mrr__total*12) qarr
---		from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo 
-		from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl
-		where day_of_week(ds) = 6
-			and qualification_flg =1
-		group by 1, 2, 3
-	)
-)
-, tw as (
-	select *
-		, lag(vol) over(partition by org_id order by ds) prev_vol
-		, lag(indexes) over(partition by org_id order by ds) prev_indexes
-	from (
-		select ds, org_id, coalesce(sum(active_7d_usage), 0) vol, coalesce(sum(search_index_count), 0) indexes
---		from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo 
-		from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl
-		where day_of_week(ds) = 6
-		group by 1, 2
-	)
---	where org_id = '63eaa3d18a71b9732c09fe8b'
-)
-select quals.ds + interval '7' day as ds, channel, count(org_id) churned_orgs
-	, sum(coalesce(tw_qarr, 0)-coalesce(qarr, 0)) arr_wow
-	, sum(coalesce(qarr, 0)) qarr_lw
---select *
-from quals left join tw
-using (org_id)
-where quals.ds + interval '7' day = tw.ds
-	and qarr > 0
-	and (( vol = 0 and prev_vol > 0 ) or ( indexes = 0 and prev_indexes > 0 ))
-	and quals.ds + interval '7' day >= :tw_date - interval '60' day 
-group by 1, 2
-order by 1 desc, 2
-
-
-
-
-
--- Lapsed orgs
-
-with quals as (
-	select *, lead(qarr) over(partition by org_id order by ds) tw_qarr
-	from (
-		select ds, org_id, org_name
---			, sales_channel
-			, cluster_grade channel
-			, sum(mrr__total*12) qarr
---		from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo 
-		from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl
-		where day_of_week(ds) = 6
-			and qualification_flg =1
-		group by 1, 2, 3, 4
-	)
---	where ds = date'2023-09-09'
-)
-, tw as (
-	select *, lead(vol) over(partition by org_id order by ds) tw_vol
-	from (
-		select ds, org_id, sum(active_7d_usage) vol
---		from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo 
-		from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl
-		where day_of_week(ds) = 6
-		group by 1, 2
-	)
-)
-select ds + interval '7' day ds, channel, count(distinct org_id) orgs, sum(qarr) qarr
-from quals left join tw
-using (ds, org_id)
-where 1=1
-	and qarr > 0
-	and tw_qarr is null
---	and ds = date'2023-09-09'
-	and vol > 0
-	and (tw_vol > 0 and tw_vol is not null)
+select tmp.extracted_at
+,tmp.account_name
+,tmp.acctid
+,tmp.opp_id
+,tmp.workload_id 
+,tmp.wl_create_date
+,tmp.opp_close_date
+,tmp.csm_approve_date
+,tmp.stage
+,tmp.onboarding_status__c 
+,tmp.searchimportance
+,tmp.wl_type
+,tmp.est_12m_arr
+,tmp.search_query_volume_rolling_7_day__c
+,tmp.weeks_above_300_search_queries__c
+,tmp.weeks_above_10_000_search_queries__c
+,tmp.weeks_above_100_000_search_queries__c
+,tmp.num_clusters
+,tmp.deployed
+,tmp.acquired
+,tmp.activated
+,tmp.qualified
+,tmp.qualification_flg
+,w.total_arr
+,tmp.deployed_arr
+,tmp.qualified_arr
+,tmp.active_7d_usage
+,tmp.total_data_indexed
+,case when tmp.production_flag>0 then 1 else 0 end as production_flag
+,fnt.cluster_id
+,fnt.deployment_ds
+,fnt.acquisition_ds 
+,fnt.activation_ds
+,fnt.qualification_ds
+from final_table fnt
+join
+(select extracted_at
+,account_name
+,acctid
+,opp_id
+,workload_id 
+,wl_create_date
+,opp_close_date
+,csm_approve_date
+,stage
+,onboarding_status__c 
+,searchimportance
+,wl_type
+,est_12m_arr
+,search_query_volume_rolling_7_day__c
+,weeks_above_300_search_queries__c
+,weeks_above_10_000_search_queries__c
+,weeks_above_100_000_search_queries__c
+,count(distinct cluster_id) as num_clusters
+,sum(deployed) as deployed
+,sum(acquired) as acquired
+,sum(activated) as activated
+,sum(qualified) as qualified
+,sum(qualification_flg) as qualification_flg
+,sum(case when deployed>0 then mrr__total else 0 end)*12 as  deployed_arr
+,sum(case when qualified>0 then mrr__total else 0 end)*12 as  qualified_arr
+,sum(active_7d_usage) as active_7d_usage
+,sum(total_data_indexed) as total_data_indexed
+,sum(production_flag) as production_flag
+from final_table
+group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17) tmp
+on fnt.workload_id = tmp.workload_id
+left join workload_arr w
+on fnt.workload_id = w.workload_id
+where fnt.row_funnel=1
+order by account_name, wl_create_date, deployment_ds
 	and ds + interval '7' day >= :tw_date - interval '60' day
 group by 1, 2
 order by 1, 2
