@@ -254,6 +254,3 @@ left join workload_arr w
 on fnt.workload_id = w.workload_id
 where fnt.row_funnel=1
 order by account_name, wl_create_date, deployment_ds
-	and ds + interval '7' day >= :tw_date - interval '60' day
-group by 1, 2
-order by 1, 2
