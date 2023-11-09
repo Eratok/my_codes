@@ -1,0 +1,103 @@
+ -- Orgs with more than 1M weekly queries
+
+select ds, count(granularity_id) filter(where active_7d_usage>= 1000000)
+--from awsdatacatalog.ns__analytics_postprocessing.analytics__atlas_search_kpi_usage_dim 
+from awsdatacatalog.ns__analytics_postprocessing.analytics__atlas_search_usage_dim 
+where ds >= date'2023-02-01'
+and granularity = 'organization'
+group by 1
+order by 1 desc
+
+-- Assoc. ARR by cluster grade
+select cluster_grade , sum(mrr__total*12) assoc_arr, count(distinct org_wl_id) counts
+from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl 
+where ds = date'2023-10-14'
+and qualification_flg =1
+group by 1
+
+
+-- Targets as of any day
+-- Already updated on doc
+select *
+from awsdatacatalog.product_analytics.atlas_search_fy25_targets 
+where ds = date'2023-10-21'
+
+
+-- Self Attach rate on PTs (new v/s existing)
+--QBR - Q3
+--new PT - they started paying us in Q3 - after 8/1
+
+with 
+orgdate as (
+	SELECT
+       org_id,
+       date_trunc('month', min(date(usage_date))) as org_paying_month,
+       date(MIN(usage_date)) as org_first_mrr_date
+     FROM
+       ns__analytics_postprocessing.analytics__atlas__mrr_tagging_org
+     WHERE (mrr__total > 0)
+     and org_sales_channel = 'self-serve'
+     and (org_sfdc_account_id != '001A000000FhCagIAF' or org_sfdc_account_id is null)
+     GROUP BY 1
+),
+raw_deploy as (
+	select 
+--		source,
+		s.org_id,
+		date_trunc('month',min(dep_ds)) as cohort_deploy_month,
+		min(dep_ds) as deploy_date
+	from awsdatacatalog.product_analytics.search_goal_revised_mapping s
+	where s.source = 'Self-Serve'
+	group by 1
+--		, 2
+),
+maps as (
+	select 
+	o.org_id as org_id,
+	o.org_paying_month,
+	o.org_first_mrr_date,
+	r.cohort_deploy_month,
+	r.deploy_date
+	from orgdate o
+	left join raw_deploy r on o.org_id = r.org_id
+	where org_first_mrr_date >= date'2023-08-01' and org_first_mrr_date <= date'2023-10-31' -- new PTs
+--	where org_first_mrr_date < date'2023-06-01'  -- existing PTs
+)
+select 
+COUNT(distinct org_id) as total_new_pts,
+COUNT(distinct case when deploy_date is not null and deploy_date between date'2023-10-01' and date'2023-10-31' then org_id else null end) as deploys_on_new_pts
+from maps 
+
+-- Deploy to qualify - self-serve & PLS
+
+with base as (
+	select final_source, org_id
+		, date_trunc('month', min(deployment_ds)) cohort_dep_month
+		, date_trunc('month', min(qualification_ds)) cohort_qual_month
+	from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2 
+	left join (
+		select distinct org_id, cluster_id, final_source
+		from awsdatacatalog.product_analytics.ms_search_org_mapping_final_version_dateversioned
+--		change to latest date
+		where processed_date = date'2023-10-31'
+	) using (org_id, cluster_id)
+	where (sfdc_account_id != '001A000000FhCagIAF' or sfdc_account_id is null)
+	group by 1, 2
+)
+, raw_quals as (
+	select final_source, cohort_dep_month, cohort_qual_month, count(distinct org_id) dep_orgs
+	from base
+	group by 1, 2, 3
+)
+, cohort_totals as (
+	select final_source, cohort_dep_month, count(distinct org_id) total_orgs
+	from base
+	group by 1, 2
+)
+select final_source, cohort_dep_month, raw_quals.*, total_orgs
+from raw_quals join cohort_totals
+using (final_source, cohort_dep_month)
+
+
+
+
