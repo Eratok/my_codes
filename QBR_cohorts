@@ -1,0 +1,609 @@
+
+-- WL creations
+
+with base as (
+	select granularity_id, b.*, wl_qualification_eligible,wl_activation_eligible,wl_acquisition_eligible,wl_deployment_eligible,wl_activated,wl_acquired,wl_deployed
+	from awsdatacatalog.product_analytics.ms_search_workloads_base b
+	join awsdatacatalog.product_analytics.search_workloads_funnel f
+	using (granularity_id)
+	left join (
+		select distinct org_id, cluster_id, final_source source
+		from awsdatacatalog.product_analytics.ms_search_org_mapping_final_version_dateversioned 
+		where processed_date = date'2023-11-01'
+	) using (org_id, cluster_id)
+	where (source = 'Sales-Led Sales') or (source is null)
+--		and wl_qualification_eligible
+)
+, eligibility as (
+	select granularity_id, wl_qualification_eligible, wl_activation_eligible, wl_acquisition_eligible, wl_deployment_eligible
+--		, case when count(cluster_id) = 0 or count(cluster_id) filter(where cluster_qualification_date is null or cluster_qualification_date >= workload_creation_date) > 0 then true else false end wl_qualification_eligible
+		, max(case when nbm_date is not null then 1 else 0 end) nbm_reached
+		, date_trunc('month', min(workload_creation_date)) cohort_creation_month
+	from base 
+	group by 1, 2, 3, 4, 5
+)
+select cohort_creation_month
+	, count(distinct granularity_id) wls
+	, sum(nbm_reached) wl_nbms
+	, count(distinct granularity_id) filter(where not wl_deployment_eligible) wl_already_deployed
+	, count(distinct granularity_id) filter(where not wl_acquisition_eligible) wl_already_acquired
+	, count(distinct granularity_id) filter(where not wl_activation_eligible) wl_already_activated
+	, count(distinct granularity_id) filter(where not wl_qualification_eligible) wl_already_qualified
+from eligibility
+--where wl_qualification_eligible
+group by 1
+
+
+
+--WL creations to eligible deps
+
+with base as (
+	select granularity_id, b.*, wl_qualification_eligible,wl_activation_eligible,wl_acquisition_eligible,wl_deployment_eligible,wl_activated,wl_acquired,wl_deployed
+	from awsdatacatalog.product_analytics.ms_search_workloads_base b
+	join awsdatacatalog.product_analytics.search_workloads_funnel f
+	using (granularity_id)
+	left join (
+		select distinct org_id, cluster_id, final_source source
+		from awsdatacatalog.product_analytics.ms_search_org_mapping_final_version_dateversioned 
+		where processed_date = date'2023-11-01'
+	) using (org_id, cluster_id)
+	where (source = 'Sales-Led Sales') or (source is null)
+		and wl_qualification_eligible
+)
+, cohorts as (
+	select granularity_id
+		, date_trunc('month', min(workload_creation_date)) cohort_creation_month
+		, date_trunc('month', min(cluster_deployment_date) filter(where wl_deployment_eligible and wl_deployed and cluster_deployment_date >= workload_creation_date)) cohort_dep_month
+	from base
+	group by 1
+)
+, wl_totals as (
+	select cohort_creation_month, count(granularity_id) total_ever_wls
+	from cohorts
+	group by 1
+)
+, cohort_totals as (
+	select cohort_creation_month, cohort_dep_month, count(granularity_id) wl_deps
+	from cohorts
+	group by 1, 2
+)
+select *
+from cohort_totals join wl_totals
+using (cohort_creation_month)
+
+
+
+
+-- eligible deps to eligible acqs
+
+
+with base as (
+	select granularity_id, b.*, wl_qualification_eligible,wl_activation_eligible,wl_acquisition_eligible,wl_deployment_eligible,wl_activated,wl_acquired,wl_deployed
+	from awsdatacatalog.product_analytics.ms_search_workloads_base b
+	join awsdatacatalog.product_analytics.search_workloads_funnel f
+	using (granularity_id)
+	left join (
+		select distinct org_id, cluster_id, final_source source
+		from awsdatacatalog.product_analytics.ms_search_org_mapping_final_version_dateversioned 
+		where processed_date = date'2023-11-01'
+	) using (org_id, cluster_id)
+	where (source = 'Sales-Led Sales') or (source is null)
+		and wl_qualification_eligible
+)
+, cohorts as (
+	select granularity_id
+		, date_trunc('month', min(cluster_deployment_date) ) cohort_dep_month
+		, date_trunc('month', min(cluster_acquisition_date) filter(where wl_acquisition_eligible and wl_acquired and cluster_acquisition_date >= cluster_deployment_date)) cohort_acq_month
+	from base
+	where wl_deployment_eligible
+		and wl_deployed 
+		and cluster_deployment_date >= workload_creation_date
+	group by 1
+)
+, wl_totals as (
+	select cohort_dep_month, count(granularity_id) total_ever_wls
+	from cohorts
+	group by 1
+)
+, cohort_totals as (
+	select cohort_dep_month, cohort_acq_month, count(granularity_id) wl_acqs
+	from cohorts
+	group by 1, 2
+)
+select *
+from cohort_totals join wl_totals
+using (cohort_dep_month)
+
+
+
+
+
+-- ineligible deps to eligible acqs
+
+
+with base as (
+	select granularity_id, b.*, wl_qualification_eligible,wl_activation_eligible,wl_acquisition_eligible,wl_deployment_eligible,wl_activated,wl_acquired,wl_deployed
+	from awsdatacatalog.product_analytics.ms_search_workloads_base b
+	join awsdatacatalog.product_analytics.search_workloads_funnel f
+	using (granularity_id)
+	left join (
+		select distinct org_id, cluster_id, final_source source
+		from awsdatacatalog.product_analytics.ms_search_org_mapping_final_version_dateversioned 
+		where processed_date = date'2023-11-01'
+	) using (org_id, cluster_id)
+	where (source = 'Sales-Led Sales') or (source is null)
+		and wl_qualification_eligible
+)
+, cohorts as (
+	select granularity_id
+		, date_trunc('month', min(workload_creation_date) ) cohort_creation_month
+		, date_trunc('month', min(cluster_acquisition_date) filter(where wl_acquisition_eligible and wl_acquired and cluster_acquisition_date >= workload_creation_date)) cohort_acq_month
+	from base
+	where not wl_deployment_eligible
+	group by 1
+)
+, wl_totals as (
+	select cohort_creation_month, count(granularity_id) total_ever_wls
+	from cohorts
+	group by 1
+)
+, cohort_totals as (
+	select cohort_creation_month, cohort_acq_month, count(granularity_id) wl_acqs
+	from cohorts
+	group by 1, 2
+)
+select *
+from cohort_totals join wl_totals
+using (cohort_creation_month)
+
+
+
+
+-- eligible acqs to eligible acts
+
+
+with base as (
+	select granularity_id, b.*, wl_qualification_eligible,wl_activation_eligible,wl_acquisition_eligible,wl_deployment_eligible,wl_activated,wl_acquired,wl_deployed
+	from awsdatacatalog.product_analytics.ms_search_workloads_base b
+	join awsdatacatalog.product_analytics.search_workloads_funnel f
+	using (granularity_id)
+	left join (
+		select distinct org_id, cluster_id, final_source source
+		from awsdatacatalog.product_analytics.ms_search_org_mapping_final_version_dateversioned 
+		where processed_date = date'2023-11-01'
+	) using (org_id, cluster_id)
+	where (source = 'Sales-Led Sales') or (source is null)
+		and wl_qualification_eligible
+)
+, cohorts as (
+	select granularity_id
+		, date_trunc('month', min(cluster_acquisition_date) ) cohort_acq_month
+		, date_trunc('month', min(cluster_activation_date) filter(where wl_activation_eligible and wl_activated and cluster_activation_date >= cluster_acquisition_date)) cohort_act_month
+	from base
+	where wl_acquisition_eligible
+		and wl_acquired
+		and (
+			(wl_deployment_eligible and cluster_deployment_date >= workload_creation_date )
+			or (not wl_deployment_eligible and cluster_acquisition_date >= workload_creation_date )
+		)
+	group by 1
+)
+, wl_totals as (
+	select cohort_acq_month, count(granularity_id) total_ever_wls
+	from cohorts
+	group by 1
+)
+, cohort_totals as (
+	select cohort_acq_month, cohort_act_month, count(granularity_id) wl_acts
+	from cohorts
+	group by 1, 2
+)
+select *
+from cohort_totals join wl_totals
+using (cohort_acq_month)
+
+
+
+
+-- ineligible acqs to eligible acts
+
+
+with base as (
+	select granularity_id, b.*, wl_qualification_eligible,wl_activation_eligible,wl_acquisition_eligible,wl_deployment_eligible,wl_activated,wl_acquired,wl_deployed
+	from awsdatacatalog.product_analytics.ms_search_workloads_base b
+	join awsdatacatalog.product_analytics.search_workloads_funnel f
+	using (granularity_id)
+	left join (
+		select distinct org_id, cluster_id, final_source source
+		from awsdatacatalog.product_analytics.ms_search_org_mapping_final_version_dateversioned 
+		where processed_date = date'2023-11-01'
+	) using (org_id, cluster_id)
+	where (source = 'Sales-Led Sales') or (source is null)
+		and wl_qualification_eligible
+)
+, cohorts as (
+	select granularity_id
+		, date_trunc('month', min(workload_creation_date) ) cohort_creation_month
+		, date_trunc('month', min(cluster_activation_date) filter(where wl_activation_eligible and wl_activated and cluster_activation_date >= workload_creation_date)) cohort_act_month
+	from base
+	where not wl_acquisition_eligible
+	group by 1
+)
+, wl_totals as (
+	select cohort_creation_month, count(granularity_id) total_ever_wls
+	from cohorts
+	group by 1
+)
+, cohort_totals as (
+	select cohort_creation_month, cohort_act_month, count(granularity_id) wl_acts
+	from cohorts
+	group by 1, 2
+)
+select *
+from cohort_totals join wl_totals
+using (cohort_creation_month)
+
+
+
+
+-- eligible acts to eligible quals
+
+
+with base as (
+	select granularity_id, b.*, wl_qualification_eligible,wl_activation_eligible,wl_acquisition_eligible,wl_deployment_eligible,wl_activated,wl_acquired,wl_deployed
+	from awsdatacatalog.product_analytics.ms_search_workloads_base b
+	join awsdatacatalog.product_analytics.search_workloads_funnel f
+	using (granularity_id)
+	left join (
+		select distinct org_id, cluster_id, final_source source
+		from awsdatacatalog.product_analytics.ms_search_org_mapping_final_version_dateversioned 
+		where processed_date = date'2023-11-01'
+	) using (org_id, cluster_id)
+	where (source = 'Sales-Led Sales') or (source is null)
+		and wl_qualification_eligible
+)
+, cohorts as (
+	select granularity_id
+		, date_trunc('month', min(cluster_activation_date) ) cohort_act_month
+		, date_trunc('month', min(cluster_qualification_date) filter(where wl_qualification_eligible and cluster_qualification_date >= cluster_activation_date)) cohort_qual_month
+	from base
+	where wl_activation_eligible
+		and wl_activated
+		and (
+			(wl_acquisition_eligible and 
+				((wl_deployment_eligible and cluster_deployment_date >= workload_creation_date )
+				or (not wl_deployment_eligible and cluster_acquisition_date >= workload_creation_date ) )
+			)
+			or (not wl_acquisition_eligible and cluster_activation_date >= workload_creation_date )
+		)
+	group by 1
+)
+, wl_totals as (
+	select cohort_act_month, count(granularity_id) total_ever_wls
+	from cohorts
+	group by 1
+)
+, cohort_totals as (
+	select cohort_act_month, cohort_qual_month, count(granularity_id) wl_quals
+	from cohorts
+	group by 1, 2
+)
+select *
+from cohort_totals join wl_totals
+using (cohort_act_month)
+
+
+
+
+-- ineligible acts to eligible quals
+
+
+with base as (
+	select granularity_id, b.*, wl_qualification_eligible,wl_activation_eligible,wl_acquisition_eligible,wl_deployment_eligible,wl_activated,wl_acquired,wl_deployed
+	from awsdatacatalog.product_analytics.ms_search_workloads_base b
+	join awsdatacatalog.product_analytics.search_workloads_funnel f
+	using (granularity_id)
+	left join (
+		select distinct org_id, cluster_id, final_source source
+		from awsdatacatalog.product_analytics.ms_search_org_mapping_final_version_dateversioned 
+		where processed_date = date'2023-11-01'
+	) using (org_id, cluster_id)
+	where (source = 'Sales-Led Sales') or (source is null)
+--		and wl_qualification_eligible
+)
+, cohorts as (
+	select granularity_id
+		, date_trunc('month', min(workload_creation_date) ) cohort_creation_month
+		, date_trunc('month', min(cluster_qualification_date) filter(where wl_qualification_eligible and cluster_qualification_date >= workload_creation_date)) cohort_qual_month
+	from base
+	where not wl_activation_eligible
+	group by 1
+)
+, wl_totals as (
+	select cohort_creation_month, count(granularity_id) total_ever_wls
+	from cohorts
+	group by 1
+)
+, cohort_totals as (
+	select cohort_creation_month, cohort_qual_month, count(granularity_id) wl_quals
+	from cohorts
+	group by 1, 2
+)
+select *
+from cohort_totals join wl_totals
+using (cohort_creation_month)
+
+
+
+--Dep - Acq
+
+with 
+raw_deploy as ( 
+	select 
+		source,
+		org_id,
+		date_trunc('month',min(dep_ds)) as cohort_deploy_month,
+		date_trunc('month',min(acq_ds)) as cohort_acq_month
+	from awsdatacatalog.product_analytics.search_goal_revised_mapping
+	group by 1, 2
+)
+, raw_acq as (
+	select 
+	source,
+	cohort_deploy_month,
+	cohort_acq_month,
+	count(distinct org_id) as acquisitions
+	from raw_deploy
+	group by 1,2,3
+)
+, cohort_totals as (
+	select 
+	source,
+	cohort_deploy_month,
+	COUNT(distinct org_id) as total_ever_orgs
+	from raw_deploy 
+	group by 1,2
+)
+select 
+	r.*,
+	total_ever_orgs
+from raw_acq r
+join cohort_totals t on t.source = r.source and r.cohort_deploy_month = t.cohort_deploy_month
+
+
+
+
+-- Acq + Quals
+
+
+with raw_deploy as (
+	select 
+		source,
+		org_id,
+		date_trunc('month',min(acquisition_ds)) as cohort_acq_month,
+		date_trunc('month',min(qualification_ds)) as cohort_qual_month
+	from awsdatacatalog.product_analytics.ms_search_org_mapping
+	group by 1, 2
+)
+, raw_qual as (
+	select 
+	source,
+	cohort_acq_month,
+	cohort_qual_month,
+	count(distinct org_id) as qualifications
+	from raw_deploy
+	group by 1,2,3
+)
+,cohort_totals as (
+	select 
+	source,
+	cohort_acq_month,
+	COUNT(distinct org_id) as total_ever_orgs
+	from raw_deploy 
+	group by 1,2
+)
+select 
+	r.*,
+	total_ever_orgs
+from raw_qual r
+join cohort_totals t on t.source = r.source and r.cohort_acq_month = t.cohort_acq_month
+
+
+
+
+-- Self Dep + Acqs
+
+with 
+orgdate as (
+	SELECT
+       org_id
+     , MIN(usage_date) org_first_mrr_date
+     FROM
+       ns__analytics_postprocessing.analytics__atlas__mrr_tagging_org
+     WHERE (mrr__total > 0)
+     GROUP BY 1
+)
+,raw_deploy as (
+	select 
+		source,
+		s.org_id,
+		date_trunc('month',min(dep_ds)) as cohort_deploy_month,
+		date_trunc('month',min(acq_ds)) as cohort_acq_month,
+		date_trunc('month', min(org_first_mrr_date)) as org_paying_date
+	from awsdatacatalog.product_analytics.search_goal_revised_mapping s
+	left join orgdate o 
+		on s.org_id = o.org_id
+	where s.source = 'Self-Serve'
+	group by 1, 2
+)
+,cohort_totals as (
+	select 
+	source,
+	cohort_deploy_month,
+	case when org_paying_date is null then 'ft' when date_diff('day', org_paying_date, cohort_deploy_month)<90 then 'new' else 'existing' end as status,
+	COUNT(distinct org_id) as total_ever_deploys
+	from raw_deploy 
+	group by 1,2,3
+)
+,raw_acq as (
+	select 
+	source,
+	cohort_deploy_month,
+	case when org_paying_date is null then 'ft' when date_diff('day', org_paying_date, cohort_deploy_month)<90 then 'new' else 'existing' end as status,
+	cohort_acq_month,
+	count(distinct org_id) as acquisitions
+	from raw_deploy
+	group by 1,2,3,4
+)
+select 
+	r.*,
+	total_ever_deploys
+from raw_acq r
+join cohort_totals t on t.status = r.status and r.cohort_deploy_month = t.cohort_deploy_month
+
+
+
+
+-- Self Acqs + Quals
+
+with orgdate as (
+	SELECT
+       org_id
+     , MIN(usage_date) org_first_mrr_date
+     FROM
+       ns__analytics_postprocessing.analytics__atlas__mrr_tagging_org
+     WHERE (mrr__total > 0)
+     GROUP BY 1
+)
+,raw_deploy as (
+	select 
+		source,
+		s.org_id,
+		date_trunc('month', min(acquisition_ds)) as cohort_acq_month,
+		date_trunc('month', min(qualification_ds)) as cohort_qual_month,
+		date_trunc('month', min(org_first_mrr_date)) as org_paying_date
+	from awsdatacatalog.product_analytics.ms_search_org_mapping s
+	left join orgdate o 
+		on s.org_id = o.org_id
+	where s.source = 'Self-Serve'
+	group by 1, 2
+)
+,cohort_totals as (
+	select 
+	source,
+	cohort_acq_month,
+	case when org_paying_date is null then 'ft' when date_diff('day', org_paying_date, cohort_acq_month)<90 then 'new' else 'existing' end as status,
+	COUNT(distinct org_id) as total_ever_acquisitions
+	from raw_deploy 
+	group by 1,2,3
+)
+,raw_acq as (
+	select 
+	source,
+	cohort_acq_month,
+	case when org_paying_date is null then 'ft' when date_diff('day', org_paying_date, cohort_acq_month)<90 then 'new' else 'existing' end as status,
+	cohort_qual_month,
+	count(distinct org_id) as qualifications
+	from raw_deploy
+	group by 1,2,3,4
+)
+select 
+	r.*,
+	total_ever_acquisitions
+from raw_acq r
+join cohort_totals t on t.status = r.status and r.cohort_acq_month = t.cohort_acq_month
+
+
+
+
+--Query Volumes
+
+
+with
+base AS (
+	SELECT
+	org_id,
+	cluster_id,
+--		rq.source as source_channel,
+	s.ds,
+	date(date_trunc('month',s.ds)) AS usage_month,
+--		cohort_qual_month,
+	s.mrr__total AS mrr_total,
+	s.active_7d_usage,
+--		case when s.instance_size not in ('M0','M2','M5') and lness_30d >= 21 and active_7d_usage >= 300 then 1 else 0 end as qualification_flg
+	s.qualification_flg,
+	source
+	from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2 s  
+	left join (
+		select distinct org_id, cluster_id, final_source source
+		from awsdatacatalog.product_analytics.ms_search_org_mapping_final_version_dateversioned 
+		where processed_date = date'2023-11-01'
+	) using (org_id, cluster_id)
+)
+--, base_usage as (
+--	select 
+--		f.*,
+--		case when sum(qualification_flg) over(partition by cluster_id order by ds range between interval '29' day preceding and current row) > 0 then 1 else 0 end requal_flg 
+--	from mrr f
+--)
+--, base_1 as (
+--	select 
+--		b.*,
+--		case when qualification_flg + requal_flg > 0 then 1 else 0 end as qualification_flg_final
+--	from base_usage b
+--)
+--, base as (
+--	select org_id, cluster_id, base_1.*, grading_idea source
+--	from base_1 
+--	join awsdatacatalog.product_analytics.ms_search_org_mapping_sls_idea_v3
+--	using (org_id, cluster_id)
+--)
+, raw_qual as (
+	select source, org_id
+		, date_trunc('month', min(ds) filter(where qualification_flg = 1)) cohort_qual_month
+	from base
+	group by 1, 2
+)
+, cohort_totals as (
+	select 
+	source,
+	cohort_qual_month,
+	COUNT(distinct org_id) as total_ever_orgs
+	from raw_qual 
+	group by 1,2
+)
+, org_totals as (
+	select 
+	org_id,
+	source,
+	usage_month,
+	cohort_qual_month,
+	SUM(active_7d_usage)*4 as total_org_month_usage,
+	SUM(active_7d_usage) as avg_weekly_org_usage,
+	COUNT(distinct cluster_id) as total_qual_clusters
+	from base 
+	join raw_qual
+	using (source, org_id)
+	where (
+		day(date_add('day', 1, ds)) = 1
+		or ds = date'2021-03-30'
+--		or ds = date'2023-07-30'
+	)
+	and qualification_flg = 1
+	group by 1,2,3,4
+)
+select 
+	ot.usage_month,
+	ot.source,
+	ot.cohort_qual_month,
+	COUNT(distinct case when avg_weekly_org_usage >= 0 and avg_weekly_org_usage < 300 then ot.org_id else null end) as zero_to_three,
+	COUNT(distinct case when avg_weekly_org_usage >= 300 and avg_weekly_org_usage < 10000 then ot.org_id else null end) as three_to_ten,
+	COUNT(distinct case when avg_weekly_org_usage >= 10000 and avg_weekly_org_usage < 100000 then ot.org_id else null end) as ten_to_one_hund,
+	COUNT(distinct case when avg_weekly_org_usage >= 100000 and avg_weekly_org_usage < 1000000 then ot.org_id else null end) as one_hund_to_mil,
+	COUNT(distinct case when avg_weekly_org_usage >= 1000000 and avg_weekly_org_usage < 3000000 then ot.org_id else null end) as mil_to_three_mil,
+	COUNT(distinct case when avg_weekly_org_usage >= 3000000 then ot.org_id else null end) as three_plus,
+	COUNT(distinct ot.org_id) as total_orgs_qualified,
+	max(total_ever_orgs) as total_ever_orgs
+from org_totals ot 
+join cohort_totals c on ot.cohort_qual_month = c.cohort_qual_month and c.source = ot.source
+group by 1,2,3
