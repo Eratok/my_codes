@@ -61,7 +61,7 @@ maps as (
 	from orgdate o
 	left join raw_deploy r on o.org_id = r.org_id
 	where org_first_mrr_date >= date'2023-08-01' and org_first_mrr_date <= date'2023-10-31' -- new PTs
---	where org_first_mrr_date < date'2023-06-01'  -- existing PTs
+--	where org_first_mrr_date < date'2023-08-01'  -- existing PTs
 )
 select 
 COUNT(distinct org_id) as total_new_pts,
@@ -97,6 +97,47 @@ with base as (
 select final_source, cohort_dep_month, raw_quals.*, total_orgs
 from raw_quals join cohort_totals
 using (final_source, cohort_dep_month)
+
+
+-- lapsed ARR over time
+
+with base as (
+	select ds, org_id, final_source, max(qualification_flg) qual_flg, sum(mrr__total*12*qualification_flg) qarr
+	,min(qualification_ds) qualification_ds
+	from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2 
+		left join (
+	    select distinct cluster_id, org_id, final_source
+	    from awsdatacatalog.product_analytics.ms_search_org_mapping_final_version
+	) d using (org_id, cluster_id)
+	where day(date_add('day', 1, ds)) = 1
+	group by 1, 2, 3
+
+)
+
+,inter as (select *
+		, lag(days_since_qual) over(partition by org_id order by ds) prev_days_since_qual
+	
+	from
+		(select *
+				, lag(qual_flg) over(partition by org_id order by ds) prev_qual_flg
+				, lag(qarr) over(partition by org_id order by ds) prev_qarr
+				, date_diff('day',qualification_ds,ds) as days_since_qual
+				from base) b
+	)
+
+select final_source
+,case when prev_days_since_qual < 60 then '0-60'
+	when prev_days_since_qual >= 60 and prev_days_since_qual < 90 then '60-90'
+	when prev_days_since_qual >= 90 and prev_days_since_qual < 180 then '90-180'
+	when prev_days_since_qual >= 180 then '>180'
+	else 'na' end as days_since_qual
+,ds
+,count(distinct org_id) lapsed_orgs
+,sum(prev_qarr) lapsed_qarr
+from inter
+where prev_qual_flg = 1 and qual_flg = 0
+group by 1, 2, 3
+order by 1, 2
 
 
 
