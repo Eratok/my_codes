@@ -3,8 +3,8 @@
 
 -- Overall WoW growth
 
-@set tw_date = date'2023-11-04'
-@set lw_date = date'2023-10-28'
+@set tw_date = date'2023-11-11'
+@set lw_date = date'2023-11-04'
 
 
 select cluster_grade channel, ds
@@ -24,7 +24,7 @@ order by 1, 2
 
 with base as (
 	select org_id, org_name, ds
---		, sales_channel channel
+--	, sales_channel channel
 		, cluster_grade channel
 		, sum(mrr__total) qmrr, count(cluster_id) qclusters, sum(active_7d_usage) qvolume, max(qualification_flg) qual_flg
 		, max(cast(regexp_extract(instance_size, '\d+') as int)) biggest_instance
@@ -120,12 +120,12 @@ group by 1, 2, 3
 
 -- Org lookup
 
-select ds, cluster_id, cluster_name, org_id, org_name, instance_size, sales_channel, cluster_grade, active_7d_usage, lness_30d, total_data_indexed, search_index_count, mrr__total, mrr__total*12 aarr, qualification_flg, qualification_ds
+select ds, cluster_id, cluster_name, group_name, org_id, org_name, instance_size, sales_channel, cluster_grade, active_7d_usage, lness_30d, total_data_indexed, search_index_count, mrr__total, mrr__total*12 aarr, qualification_flg, qualification_ds
 --from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2
 --from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_6mo
 from awsdatacatalog.product_analytics.an_atlas_search_mbr_base_data_wl
-where ds in (date'2023-11-04', date'2023-10-28', date'2023-10-21', date'2023-10-14')
-and org_id = '628df1a0ccbf081ff5d4ad31'
+where ds in (date'2023-11-11',date'2023-11-04', date'2023-10-28', date'2023-10-21')
+and org_id = '60b7896f824dca0b8521b961'
 order by 2, 1 desc
 
 select *
@@ -456,8 +456,8 @@ where 1=1
 	and qarr > 0
 	and tw_qarr is null
 --	and ds = date'2023-09-09'
-	and vol > 0
-	and (tw_vol > 0 and tw_vol is not null)
+--	and vol > 0
+--	and (tw_vol > 0 and tw_vol is not null)
 	and ds + interval '7' day >= :tw_date - interval '60' day
 group by 1, 2
 order by 1, 2
