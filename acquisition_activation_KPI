@@ -1,0 +1,54 @@
+@set end_date = date'2023-10-31'
+@set st_date = date'2023-02-01'
+
+with acq as (select *
+					from
+					(select distinct
+					granularity_id as org_id
+					,org_name 
+					,tier
+					,org_sales_channel
+					, min(acquired_date) as first_acquired_date
+					, max(acquired_date) as latest_acquired_date
+					from
+					awsdatacatalog.reporting_analytics.search_funnel sf 
+					
+					where granularity='Org'
+					group by 1,2,3,4)
+					where first_acquired_date >= :st_date and first_acquired_date <= :end_date
+					and lower(org_name) not like lower('%adobe%') 
+					and lower(org_name) not like lower('%mongodb%')
+)
+
+
+,act as (select *
+					from
+					(select distinct
+					granularity_id as org_id
+					,org_name 
+					, min(activated_date) as activated_date
+					from
+					awsdatacatalog.reporting_analytics.search_funnel sf 
+					
+					where granularity='Org'
+					group by 1,2)
+					where activated_date >= :st_date and activated_date <= :end_date
+					and lower(org_name) not like lower('%adobe%') 
+					and lower(org_name) not like lower('%mongodb%') 
+)
+
+select org_sales_channel
+	  ,tier
+	  ,sum(case when first_acquired_date is not null then 1 else 0 end) as orgs_acquired
+	  ,sum(case when activated_date is not null then 1 else 0 end) as orgs_activated
+from
+(select acq.org_id
+	  ,acq.tier
+	  ,acq.org_sales_channel
+	  ,acq.first_acquired_date
+	  ,act.activated_date
+from acq
+left join act
+on acq.org_id = act.org_id) tmp
+group by 1,2
+order by 1,2
