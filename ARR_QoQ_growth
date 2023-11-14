@@ -1,0 +1,121 @@
+with base as (
+
+select org_id
+		,cluster_id 
+		,cluster_size
+		,channel
+		,arr_total
+		,qualification_ds
+		,qualification_flg
+		,case   when qualification_ds < date'2021-08-01'  then 'All_prior'
+				when qualification_ds >= date'2021-08-01' and qualification_ds <= date'2021-10-31' then 'FY22_Q3'
+				when qualification_ds >= date'2021-11-01' and qualification_ds <= date'2022-01-31' then 'FY22_Q4'
+				when qualification_ds >= date'2022-02-01' and qualification_ds <= date'2022-04-30' then 'FY23_Q1'
+				when qualification_ds >= date'2022-05-01' and qualification_ds <= date'2022-07-31' then 'FY23_Q2'
+				when qualification_ds >= date'2022-08-01' and qualification_ds <= date'2022-10-31' then 'FY23_Q3'
+				when qualification_ds >= date'2022-11-01' and qualification_ds <= date'2023-01-31' then 'FY23_Q4'
+				when qualification_ds >= date'2023-02-01' and qualification_ds <= date'2023-04-30' then 'FY24_Q1'
+				when qualification_ds >= date'2023-05-01' and qualification_ds <= date'2023-07-31' then 'FY24_Q2'
+				when qualification_ds >= date'2023-08-01' and qualification_ds <= date'2023-10-31' then 'FY24_Q3'
+				else 'NA' end as qual_qt
+				
+from
+(select distinct org_id
+		,cluster_id 
+		,(cast(regexp_extract(instance_size, '\d+') as int)) cluster_size
+		,sales_channel channel
+		,(mrr__total*12) as arr_total
+		,qualification_ds
+		,qualification_flg
+		,row_number() over (partition by org_id order by qualification_ds) as qual_rank
+from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2
+	 where qualification_flg=1) tmp
+where qual_rank = 1
+--and qualification_ds >= date'2021-08-01'
+)
+
+,search_quarter_end as (select * ,(cast(regexp_extract(instance_size, '\d+') as int)) cluster_size 
+						from awsdatacatalog.product_analytics.analytics__atlas_search_mbr_base_data_static_v2
+						where ds in (date'2021-10-31',date'2022-01-31',date'2022-04-30',date'2022-07-31'
+									,date'2022-10-31',date'2023-01-31',date'2023-04-30',date'2023-07-31'
+									,date'2023-10-31')
+							 and qualification_flg=1)
+							 
+,joined_table as (select v2.*
+	   					,case when cluster_id_qt = previous_cluster_id_qt and size_increased_ind = 1 and cluster_size_qt = previous_cluster_size_qt then 0 else size_increased_ind end as newly_size_increased_ind
+					
+					from							 
+					(select v1.*
+						   ,case when added_qual_clusters_ind = 0 and cluster_size_qt > cluster_size then 1 else 0 end as size_increased_ind
+						   ,case when cluster_id_qt = previous_cluster_id_qt and added_qual_clusters_ind = 1 then 0 
+						   		 when cluster_id_qt is not null and previous_cluster_id_qt is null and added_qual_clusters_ind = 0 then 1 
+						  		 else added_qual_clusters_ind end as newly_added_qual_clusters_ind
+						   			 
+					from				 
+					(select b.*
+											   ,s.ds
+											   ,s.cluster_id as cluster_id_qt
+											   ,lag(s.cluster_id,1) over (partition by s.cluster_id order by s.ds) as previous_cluster_id_qt
+											   ,s.cluster_size as cluster_size_qt
+											   ,lag(s.cluster_size,1) over (partition by s.cluster_id order by s.ds) as previous_cluster_size_qt
+											   ,(s.mrr__total*12) as arr_total_qt
+											   ,s.qualification_ds as qualification_ds_qt
+											   ,s.qualification_flg as qualification_flg_qt
+											   ,case when b.cluster_id = s.cluster_id then 0 else 1 end as added_qual_clusters_ind
+						  
+					from base b
+					left join search_quarter_end s 
+					on b.org_id = s.org_id) v1) v2)
+--order by org_id, cluster_id_qt, ds				
+					
+					
+select g.channel,
+	  g.qual_qt,
+	  g.orgs_starting,
+	  g.arr_total_starting,
+	  s.ds,
+--	  s.added_qual_clusters_ind,
+	  s.newly_added_qual_clusters_ind,
+--	  s.size_increased_ind,
+--	  s.newly_size_increased_ind,
+	  s.orgs,
+	  s.arr_total_qt,
+	  s.clusters
+					
+from					
+(select channel,
+		qual_qt,
+		count(distinct org_id) as orgs_starting,
+		sum(arr_total) as arr_total_starting
+					
+from base
+group by 1,2) g			
+left join (select channel,
+	   qual_qt,
+	   ds,
+--	   added_qual_clusters_ind,
+	   newly_added_qual_clusters_ind,
+--	   size_increased_ind,
+--	   newly_size_increased_ind,   
+	   count(distinct org_id) as orgs,
+	   sum(arr_total_qt) as arr_total_qt,
+	   count(distinct cluster_id_qt) as clusters
+									
+	  from joined_table	
+	  group by 1,2,3,4) s
+on g.channel = s.channel
+and	g.qual_qt = s.qual_qt
+order by channel, qual_qt, ds
+
+--select distinct org_id,
+--		channel,
+--	    qual_qt,
+--	    ds,
+--	    cluster_id_qt,
+--	    newly_added_qual_clusters_ind,
+--	    arr_total_qt
+									
+--	  from joined_table	
+	
+--where ds = date'2023-10-31' and newly_added_qual_clusters_ind = 1 and qual_qt in ('All_prior','FY22_Q3','FY22_Q4','FY23_Q1','FY23_Q2', 'FY23_Q3')
+--order by cluster_id_qt, ds
