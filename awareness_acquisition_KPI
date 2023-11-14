@@ -1,0 +1,89 @@
+@set end_date = date'2023-02-04'
+@set st_date = date'2022-02-01'
+
+
+with awareness as (select distinct sa.org_id as a_org_id,
+					case when atlas.self_serve_or_sales_sold = 'Self Serve' then 'self-serve'
+						 when atlas.self_serve_or_sales_sold = 'Sales Sold' then 'sales-sold' end as org_sales_channel,
+					case when atlas.paid_tier = 1 then 'Paid'
+						 when atlas.paid_tier = 0 then 'Free' end as tier
+					from
+					 	(select granularity_id as org_id,
+						            stage AS event,
+						            org_sales_channel,
+						            paid_tier_flg,
+						            CAST(ds AS timestamp) AS timestamp
+						       
+					        from ns__analytics_postprocessing.analytics__atlas_search_acquisition_funnel_fct
+					        where stage = 'awareness'
+					            and granularity = 'organization'
+					            and ds >= :st_date and ds <= :end_date
+					            and lower(atlas_org_name) not like lower('%adobe%') 
+								and lower(atlas_org_name) not like lower('%mongodb%')) sa
+					     left join (select distinct atlas_org_id
+													,self_serve_or_sales_sold  
+													,paid_tier
+													from awsdatacatalog.marketing_analytics.atlas_orgs_and_creators_lite) atlas
+						 on sa.org_id = atlas.atlas_org_id
+)
+         
+					
+,dep as (select *
+					from
+					(select distinct
+					granularity_id as org_id
+					,org_name 
+					,tier as tier_s
+					,org_sales_channel as sales_channel
+					, min(deployed_date) as deploy_date
+					from
+					awsdatacatalog.reporting_analytics.search_funnel sf 
+					
+					where granularity='Org'
+					group by 1,2,3,4)
+					where deploy_date >= :st_date and deploy_date <= :end_date
+					and lower(org_name) not like lower('%adobe%') 
+					and lower(org_name) not like lower('%mongodb%') 
+)
+
+,agg_table as (select *
+				, coalesce (a_org_id,org_id) as org_main
+				, coalesce (org_sales_channel,sales_channel) as final_channel
+				, coalesce (tier,tier_s) as final_tier
+				from awareness a
+				full outer join dep d 
+				on a.a_org_id=d.org_id
+				where 1=1
+)	
+				
+,acq as (select *
+					from
+					(select distinct
+					granularity_id as org_id
+					,org_name 
+					,tier
+					,org_sales_channel
+					, min(acquired_date) as first_acquired_date
+					, max(acquired_date) as latest_acquired_date
+					from
+					awsdatacatalog.reporting_analytics.search_funnel sf 
+					
+					where granularity='Org'
+					group by 1,2,3,4)
+					where first_acquired_date >= :st_date and first_acquired_date <= :end_date
+					and lower(org_name) not like lower('%adobe%') 
+					and lower(org_name) not like lower('%mongodb%')
+)
+
+select 	ag.final_channel,
+		ag.final_tier,
+		count(distinct ag.org_main) as orgs_aware_or_deployed,
+		sum(case when a.first_acquired_date is not null then 1 else 0 end) as orgs_acquired
+	
+from agg_table ag
+left join acq a
+on ag.org_main = a.org_id
+group by 1,2
+order by 1,2
+	
+				
